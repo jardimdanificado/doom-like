@@ -1,12 +1,112 @@
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
-  <meta charset="UTF-8">
-  <title>doom-like</title>
+<meta charset="UTF-8">
+<title>POC - generic voxel world</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+    body {
+        margin: 0;
+        background: #87CEEB;
+        overflow: hidden;
+        font-family: 'Courier New', monospace;
+    }
+    canvas {
+        display: block;
+    }
+    #crosshair {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 20px;
+        height: 20px;
+        pointer-events: none;
+    }
+    #crosshair::before,
+    #crosshair::after {
+        content: '';
+        position: absolute;
+        background: white;
+    }
+    #crosshair::before {
+        width: 2px;
+        height: 20px;
+        left: 9px;
+    }
+    #crosshair::after {
+        width: 20px;
+        height: 2px;
+        top: 9px;
+    }
+    #info {
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        color: white;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+        font-size: 14px;
+        line-height: 1.5;
+    }
+    #interaction {
+        position: fixed;
+        bottom: 100px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: white;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+        font-size: 16px;
+        font-weight: bold;
+        display: none;
+    }
+    #block-outline {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 60px;
+        height: 60px;
+        border: 3px solid rgba(255, 255, 255, 0.5);
+        pointer-events: none;
+        display: none;
+    }
+    #inventory {
+        position: fixed;
+        bottom: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 5px;
+    }
+    .inventory-slot {
+        width: 50px;
+        height: 50px;
+        background: rgba(0,0,0,0.5);
+        border: 2px solid white;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 10px;
+        cursor: pointer;
+    }
+    .inventory-slot.selected {
+        border-color: yellow;
+        background: rgba(255,255,0,0.3);
+    }
+    .inventory-slot .count {
+        font-size: 12px;
+        font-weight: bold;
+    }
+</style>
 </head>
 <body>
-  <a href="3d.html">3d real</a><br>
-  <a href="raycasted.html">pseudo-3d</a>
-  <a href="mine.html">blocks</a>
+<div id="crosshair"></div>
+<div id="interaction"></div>
+<div id="block-outline"></div>
+<div id="inventory"></div>
+
+<script type = "module" src="./main.js"></script>
 </body>
 </html>
