@@ -2,7 +2,7 @@
 <html lang="pt-br">
 <head>
 <meta charset="UTF-8">
-<title>Minecraft Style 3D - Modular</title>
+<title>POC - generic voxel world</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <style>
     body {
@@ -46,6 +46,7 @@
         color: white;
         text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
         font-size: 14px;
+        line-height: 1.5;
     }
     #interaction {
         position: fixed;
@@ -58,16 +59,53 @@
         font-weight: bold;
         display: none;
     }
+    #block-outline {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 60px;
+        height: 60px;
+        border: 3px solid rgba(255, 255, 255, 0.5);
+        pointer-events: none;
+        display: none;
+    }
+    #inventory {
+        position: fixed;
+        bottom: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 5px;
+    }
+    .inventory-slot {
+        width: 50px;
+        height: 50px;
+        background: rgba(0,0,0,0.5);
+        border: 2px solid white;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 10px;
+        cursor: pointer;
+    }
+    .inventory-slot.selected {
+        border-color: yellow;
+        background: rgba(255,255,0,0.3);
+    }
+    .inventory-slot .count {
+        font-size: 12px;
+        font-weight: bold;
+    }
 </style>
 </head>
 <body>
 <div id="crosshair"></div>
-<div id="info">
-    WASD - Mover | ESPAÇO - Pular | MOUSE - Olhar | E - Interagir<br>
-    CLICK ESQUERDO - Quebrar | CLICK DIREITO - Colocar bloco<br>
-    <span id="selected-block">Bloco selecionado: Grama</span>
-</div>
 <div id="interaction"></div>
+<div id="block-outline"></div>
+<div id="inventory"></div>
 
 <script>
 // ============================================================
@@ -90,6 +128,9 @@ const BLOCK_TYPES = {
         name: 'Pedra',
         solid: true,
         hasGravity: false,
+        maxHP: 100,
+        breakDamage: 20,
+        isFloor: false,
         textures: {
             all: 'stone'
         }
@@ -99,6 +140,9 @@ const BLOCK_TYPES = {
         name: 'Grama',
         solid: true,
         hasGravity: false,
+        maxHP: 50,
+        breakDamage: 30,
+        isFloor: false,
         textures: {
             top: 'grass',
             side: 'dirt',
@@ -110,6 +154,9 @@ const BLOCK_TYPES = {
         name: 'Madeira',
         solid: true,
         hasGravity: false,
+        maxHP: 75,
+        breakDamage: 25,
+        isFloor: false,
         textures: {
             all: 'wood'
         }
@@ -119,8 +166,23 @@ const BLOCK_TYPES = {
         name: 'Ouro',
         solid: true,
         hasGravity: false,
+        maxHP: 150,
+        breakDamage: 40,
+        isFloor: false,
         textures: {
             all: 'gold'
+        },
+        onUse: function(block) {
+            console.log('Bloco de ouro ativado!');
+            block.material.forEach(mat => {
+                mat.emissive = new THREE.Color(0xFFD700);
+                mat.emissiveIntensity = 0.5;
+            });
+            setTimeout(() => {
+                block.material.forEach(mat => {
+                    mat.emissiveIntensity = 0;
+                });
+            }, 1000);
         }
     },
     DOOR: {
@@ -128,17 +190,38 @@ const BLOCK_TYPES = {
         name: 'Porta',
         solid: true,
         hasGravity: false,
-        interactable: true,
+        maxHP: 60,
+        breakDamage: 22,
+        isFloor: false,
         textures: {
             all: 'door'
         },
-        state: 'closed' // closed or open
+        onUse: function(block) {
+            if (block.userData.solid) {
+                block.userData.solid = false;
+                block.rotation.y = Math.PI / 2;
+                block.material.forEach(mat => {
+                    mat.opacity = 0.3;
+                });
+                console.log('Porta aberta!');
+            } else {
+                block.userData.solid = true;
+                block.rotation.y = 0;
+                block.material.forEach(mat => {
+                    mat.opacity = 0.8;
+                });
+                console.log('Porta fechada!');
+            }
+        }
     },
     SAND: {
         id: 6,
         name: 'Areia',
         solid: true,
         hasGravity: true,
+        maxHP: 40,
+        breakDamage: 35,
+        isFloor: false,
         textures: {
             all: 'sand'
         }
@@ -214,7 +297,15 @@ let player = {
     onGround: false,
     yaw: 0,
     pitch: 0,
-    selectedBlockType: BLOCK_TYPES.GRASS
+    selectedBlockType: BLOCK_TYPES.GRASS,
+    inventory: {
+        [BLOCK_TYPES.STONE.id]: 20,
+        [BLOCK_TYPES.GRASS.id]: 30,
+        [BLOCK_TYPES.WOOD.id]: 25,
+        [BLOCK_TYPES.GOLD.id]: 10,
+        [BLOCK_TYPES.DOOR.id]: 15,
+        [BLOCK_TYPES.SAND.id]: 20
+    }
 };
 let keys = {};
 let blocks = [];
@@ -225,6 +316,8 @@ let raycaster = new THREE.Raycaster();
 let texturesLoaded = false;
 let blockTextures = {};
 let interactionTarget = null;
+let targetBlockPosition = null;
+let ghostBlock = null;
 
 // ============================================================
 // INICIALIZAÇÃO
@@ -254,6 +347,7 @@ function init() {
     scene.add(dirLight);
     
     loadTextures();
+    createInventoryUI();
     
     window.addEventListener('resize', onWindowResize);
     document.addEventListener('keydown', onKeyDown);
@@ -266,7 +360,42 @@ function init() {
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mousedown', onMouseDown);
     
+    updateInventoryDisplay();
     animate();
+}
+
+function createInventoryUI() {
+    const inventoryDiv = document.getElementById('inventory');
+    
+    Object.values(BLOCK_TYPES).forEach((blockType, index) => {
+        const slot = document.createElement('div');
+        slot.className = 'inventory-slot';
+        slot.id = `slot-${blockType.id}`;
+        slot.innerHTML = `
+            <div>${blockType.name}</div>
+            <div class="count" id="count-${blockType.id}">0</div>
+        `;
+        slot.onclick = () => selectBlockType(blockType);
+        inventoryDiv.appendChild(slot);
+    });
+}
+
+function updateInventoryDisplay() {
+    Object.values(BLOCK_TYPES).forEach(blockType => {
+        const countEl = document.getElementById(`count-${blockType.id}`);
+        if (countEl) {
+            countEl.textContent = player.inventory[blockType.id] || 0;
+        }
+        
+        const slotEl = document.getElementById(`slot-${blockType.id}`);
+        if (slotEl) {
+            if (player.selectedBlockType.id === blockType.id) {
+                slotEl.classList.add('selected');
+            } else {
+                slotEl.classList.remove('selected');
+            }
+        }
+    });
 }
 
 function onKeyDown(e) {
@@ -281,7 +410,6 @@ function onKeyDown(e) {
         handleInteraction(interactionTarget);
     }
     
-    // Trocar bloco selecionado (1-6)
     if (e.code === 'Digit1') selectBlockType(BLOCK_TYPES.STONE);
     if (e.code === 'Digit2') selectBlockType(BLOCK_TYPES.GRASS);
     if (e.code === 'Digit3') selectBlockType(BLOCK_TYPES.WOOD);
@@ -292,7 +420,7 @@ function onKeyDown(e) {
 
 function selectBlockType(blockType) {
     player.selectedBlockType = blockType;
-    document.getElementById('selected-block').textContent = `Bloco selecionado: ${blockType.name}`;
+    updateInventoryDisplay();
 }
 
 // ============================================================
@@ -313,14 +441,14 @@ function loadTextures() {
     }
     
     const texturesToLoad = [
-        { key: 'stone', url: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/minecraft/stone.png' },
-        { key: 'grass', url: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/minecraft/grass.png' },
-        { key: 'wood', url: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/minecraft/wood.png' },
-        { key: 'dirt', url: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/minecraft/dirt.png' },
-        { key: 'npc', url: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/sprite0.png' },
-        { key: 'gold', url: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/minecraft/gold.png' },
-        { key: 'door', url: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/minecraft/planks_oak.png' },
-        { key: 'sand', url: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/minecraft/sand.png' }
+        { key: 'stone', url: './dcss/dungeon/wall/stone_gray_0.png' },
+        { key: 'grass', url: './dcss/dungeon/floor/dirt_full_old.png' },
+        { key: 'wood', url: './dcss/dungeon/floor/snake_1.png' },
+        { key: 'dirt', url: './dcss/dungeon/floor/dirt_0_old.png' },
+        { key: 'npc', url: './dcss/player/base/human_male.png' },
+        { key: 'gold', url: './dcss/dungeon/wall/crystal_wall_yellow.png' },
+        { key: 'door', url: './dcss/dungeon/doors/closed_door.png' },
+        { key: 'sand', url: './dcss/dungeon/wall/sandstone_wall_0.png' }
     ];
     
     texturesToLoad.forEach(({ key, url }) => {
@@ -330,7 +458,6 @@ function loadTextures() {
             blockTextures[key] = tex;
             checkLoaded();
         }, undefined, () => {
-            // Criar textura procedural como fallback
             const canvas = document.createElement('canvas');
             canvas.width = 16;
             canvas.height = 16;
@@ -365,7 +492,6 @@ function createBlockMaterials(blockType) {
     const materials = [];
     
     if (blockType.textures.all) {
-        // Todas as faces com mesma textura
         const mat = new THREE.MeshLambertMaterial({ 
             map: blockTextures[blockType.textures.all],
             flatShading: true,
@@ -374,7 +500,6 @@ function createBlockMaterials(blockType) {
         });
         return [mat, mat, mat, mat, mat, mat];
     } else if (blockType.textures.top) {
-        // Faces diferentes (ex: grama)
         const topMat = new THREE.MeshLambertMaterial({ 
             map: blockTextures[blockType.textures.top],
             flatShading: true
@@ -391,21 +516,30 @@ function createBlockMaterials(blockType) {
     }
 }
 
-function createBlock(x, y, z, blockType) {
-    const geometry = new THREE.BoxGeometry(
-        BLOCK_SIZE, 
-        blockType.id === BLOCK_TYPES.DOOR.id ? BLOCK_SIZE * 2 : BLOCK_SIZE, 
-        blockType.id === BLOCK_TYPES.DOOR.id ? BLOCK_SIZE * 0.2 : BLOCK_SIZE
-    );
+function isPositionOccupied(x, y, z) {
+    for (let block of blocks) {
+        const dx = Math.abs(block.userData.x - x);
+        const dy = Math.abs(block.userData.y - y);
+        const dz = Math.abs(block.userData.z - z);
+        
+        if (dx < 0.01 && dy < 0.01 && dz < 0.01) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function createBlock(x, y, z, blockType, isFloorBlock = false) {
+    if (isPositionOccupied(x, y, z)) {
+        return null;
+    }
+    
+    const geometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
     
     const materials = createBlockMaterials(blockType);
     const block = new THREE.Mesh(geometry, materials);
     
-    block.position.set(
-        x, 
-        blockType.id === BLOCK_TYPES.DOOR.id ? y + 0.5 : y, 
-        z
-    );
+    block.position.set(x, y, z);
     
     block.userData = { 
         isBlock: true, 
@@ -413,9 +547,13 @@ function createBlock(x, y, z, blockType) {
         y: y, 
         z: z,
         type: blockType,
-        state: blockType.state || null,
+        solid: blockType.solid,
         hasGravity: blockType.hasGravity || false,
-        velocityY: 0
+        velocityY: 0,
+        hp: blockType.maxHP,
+        maxHP: blockType.maxHP,
+        isFloor: isFloorBlock,
+        hasUseFunction: typeof blockType.onUse === 'function'
     };
     
     scene.add(block);
@@ -464,18 +602,15 @@ function createWorld() {
         for (let x = 0; x < MAP_W; x++) {
             const typeId = mapData[z][x];
             
-            // Chão (sempre presente)
-            createBlock(x, -0.5, z, BLOCK_TYPES.STONE);
+            createBlock(x, -0.5, z, BLOCK_TYPES.STONE, false);
             
-            // Blocos do mapa
             if (typeId > 0) {
                 const blockType = Object.values(BLOCK_TYPES).find(bt => bt.id === typeId);
                 if (blockType) {
-                    createBlock(x, 0.5, z, blockType);
+                    createBlock(x, 0.5, z, blockType, false);
                     
-                    // Alguns blocos têm altura dupla
                     if (typeId === 1 || Math.random() < 0.2) {
-                        createBlock(x, 1.5, z, blockType);
+                        createBlock(x, 1.5, z, blockType, false);
                     }
                 }
             }
@@ -503,19 +638,10 @@ function handleInteraction(target) {
     if (target.userData.isBlock) {
         const block = target;
         
-        // Interagir com porta
-        if (block.userData.type.id === BLOCK_TYPES.DOOR.id) {
-            if (block.userData.state === 'closed') {
-                block.userData.state = 'open';
-                block.rotation.y = Math.PI / 2;
-                block.userData.type.solid = false;
-                console.log('Porta aberta!');
-            } else {
-                block.userData.state = 'closed';
-                block.rotation.y = 0;
-                block.userData.type.solid = true;
-                console.log('Porta fechada!');
-            }
+        if (block.userData.hasUseFunction && block.userData.type.onUse) {
+            block.userData.type.onUse(block);
+        } else {
+            console.log(`${block.userData.type.name} não tem função de uso.`);
         }
     } else if (target.userData.isNPC) {
         const npc = target;
@@ -530,19 +656,48 @@ function checkInteractionTarget() {
     const intersects = raycaster.intersectObjects(allObjects);
     
     const interactionDiv = document.getElementById('interaction');
+    const outlineDiv = document.getElementById('block-outline');
     
     if (intersects.length > 0) {
         const target = intersects[0].object;
         const distance = intersects[0].distance;
         
-        if (distance < 3 && (target.userData.interactable || 
-            (target.userData.type && target.userData.type.interactable))) {
-            interactionTarget = target;
-            const name = target.userData.isNPC ? target.userData.type.name : target.userData.type.name;
-            interactionDiv.textContent = `Pressione E para interagir com ${name}`;
-            interactionDiv.style.display = 'block';
-            return;
+        if (distance < 5 && target.userData.isBlock) {
+            const point = intersects[0].point;
+            const normal = intersects[0].face.normal;
+            
+            const hitBlock = target;
+            const bx = hitBlock.userData.x;
+            const by = hitBlock.userData.y;
+            const bz = hitBlock.userData.z;
+            
+            let newX = bx + Math.round(normal.x);
+            let newY = by + Math.round(normal.y);
+            let newZ = bz + Math.round(normal.z);
+            
+            targetBlockPosition = { x: newX, y: newY, z: newZ };
+            outlineDiv.style.display = 'block';
+        } else {
+            targetBlockPosition = null;
+            outlineDiv.style.display = 'none';
         }
+        
+        if (distance < 3) {
+            if (target.userData.isBlock && target.userData.hasUseFunction) {
+                interactionTarget = target;
+                interactionDiv.textContent = `Pressione E para usar ${target.userData.type.name}`;
+                interactionDiv.style.display = 'block';
+                return;
+            } else if (target.userData.isNPC && target.userData.interactable) {
+                interactionTarget = target;
+                interactionDiv.textContent = `Pressione E para interagir com ${target.userData.type.name}`;
+                interactionDiv.style.display = 'block';
+                return;
+            }
+        }
+    } else {
+        targetBlockPosition = null;
+        outlineDiv.style.display = 'none';
     }
     
     interactionTarget = null;
@@ -556,12 +711,10 @@ function updateFallingBlocks() {
     fallingBlocks.forEach(block => {
         if (!block.userData.hasGravity) return;
         
-        // Aplicar gravidade
         block.userData.velocityY -= GRAVITY;
         
         const newY = block.position.y + block.userData.velocityY;
         
-        // Checar colisão com outros blocos
         let onGround = false;
         for (let otherBlock of blocks) {
             if (otherBlock === block) continue;
@@ -605,24 +758,20 @@ function checkCollision(newX, newY, newZ) {
     };
     
     for (let block of blocks) {
-        if (!block.userData.type.solid) continue;
+        if (!block.userData.solid) continue;
         
         const bx = block.userData.x;
         const by = block.userData.y;
         const bz = block.userData.z;
         const half = BLOCK_SIZE / 2;
         
-        // Porta tem altura 2
-        const blockHeight = block.userData.type.id === BLOCK_TYPES.DOOR.id ? BLOCK_SIZE * 2 : BLOCK_SIZE;
-        const blockDepth = block.userData.type.id === BLOCK_TYPES.DOOR.id ? BLOCK_SIZE * 0.2 : BLOCK_SIZE;
-        
         const blockBox = {
             minX: bx - half,
             maxX: bx + half,
-            minY: by - blockHeight / 2,
-            maxY: by + blockHeight / 2,
-            minZ: bz - blockDepth / 2,
-            maxZ: bz + blockDepth / 2
+            minY: by - half,
+            maxY: by + half,
+            minZ: bz - half,
+            maxZ: bz + half
         };
         
         if (playerBox.maxX > blockBox.minX && playerBox.minX < blockBox.maxX &&
@@ -707,10 +856,21 @@ function updatePlayer() {
 // SISTEMA DE PROJÉTEIS
 // ============================================================
 function createProjectile(action) {
+    const ammoCount = player.inventory[player.selectedBlockType.id];
+    
+    if (ammoCount <= 0) {
+        console.log(`Sem munição de ${player.selectedBlockType.name}!`);
+        return;
+    }
+    
+    player.inventory[player.selectedBlockType.id]--;
+    updateInventoryDisplay();
+    
+    const damage = player.selectedBlockType.breakDamage;
+    const color = 0xff0000;
+    
     const geometry = new THREE.SphereGeometry(0.1, 8, 8);
-    const material = new THREE.MeshBasicMaterial({ 
-        color: action === 'break' ? 0xff0000 : 0x00ff00
-    });
+    const material = new THREE.MeshBasicMaterial({ color: color });
     const projectile = new THREE.Mesh(geometry, material);
     
     projectile.position.copy(camera.position);
@@ -721,12 +881,38 @@ function createProjectile(action) {
     projectile.userData = {
         isProjectile: true,
         velocity: direction.multiplyScalar(0.5),
-        action: action,
+        damage: damage,
         lifeTime: 100
     };
     
     scene.add(projectile);
     projectiles.push(projectile);
+}
+
+function placeBlock() {
+    if (!targetBlockPosition) {
+        return;
+    }
+    
+    const ammoCount = player.inventory[player.selectedBlockType.id];
+    
+    if (ammoCount <= 0) {
+        console.log(`Sem blocos de ${player.selectedBlockType.name}!`);
+        return;
+    }
+    
+    const { x, y, z } = targetBlockPosition;
+    
+    if (!isPositionOccupied(x, y, z)) {
+        const newBlock = createBlock(x, y, z, player.selectedBlockType, false);
+        if (newBlock) {
+            player.inventory[player.selectedBlockType.id]--;
+            updateInventoryDisplay();
+            console.log(`Bloco de ${player.selectedBlockType.name} colocado!`);
+        }
+    } else {
+        console.log('Posição já ocupada!');
+    }
 }
 
 function updateProjectiles() {
@@ -736,15 +922,13 @@ function updateProjectiles() {
         proj.position.add(proj.userData.velocity);
         proj.userData.lifeTime--;
         
-        // Verificar colisão com NPCs primeiro
         let hitNPC = false;
         for (let npc of npcs) {
             const distance = proj.position.distanceTo(npc.position);
             if (distance < 0.5) {
-                npc.userData.hp -= 20;
+                npc.userData.hp -= proj.userData.damage;
                 console.log(`${npc.userData.type.name} HP: ${npc.userData.hp}/${npc.userData.maxHP}`);
                 
-                // Flash vermelho ao ser atingido
                 npc.material.color.setHex(0xff0000);
                 setTimeout(() => {
                     npc.material.color.setHex(0xffffff);
@@ -765,7 +949,7 @@ function updateProjectiles() {
         
         if (hitNPC) continue;
         
-        // Verificar colisão com blocos
+        let hitBlock = false;
         for (let block of blocks) {
             const bx = block.userData.x;
             const by = block.userData.y;
@@ -778,47 +962,45 @@ function updateProjectiles() {
             );
             
             if (distance < 0.5) {
-                if (proj.userData.action === 'break') {
-                    // Quebrar bloco
-                    if (block.userData.y > -0.5) {
-                        scene.remove(block);
-                        blocks = blocks.filter(b => b !== block);
-                        fallingBlocks = fallingBlocks.filter(b => b !== block);
-                    }
-                } else {
-                    // Colocar bloco na face atingida
-                    const dx = proj.position.x - bx;
-                    const dy = proj.position.y - by;
-                    const dz = proj.position.z - bz;
+                block.userData.hp -= proj.userData.damage;
+                
+                const originalColors = [];
+                if (Array.isArray(block.material)) {
+                    block.material.forEach((mat, idx) => {
+                        originalColors[idx] = mat.color.clone();
+                        mat.color.setHex(0xffffff);
+                    });
+                    setTimeout(() => {
+                        if (block.material) {
+                            block.material.forEach((mat, idx) => {
+                                mat.color.copy(originalColors[idx]);
+                            });
+                        }
+                    }, 50);
+                }
+                
+                console.log(`${block.userData.type.name} HP: ${block.userData.hp}/${block.userData.maxHP}`);
+                
+                if (block.userData.hp <= 0) {
+                    console.log(`${block.userData.type.name} destruído!`);
                     
-                    // Determinar qual face foi atingida
-                    const absDx = Math.abs(dx);
-                    const absDy = Math.abs(dy);
-                    const absDz = Math.abs(dz);
+                    player.inventory[block.userData.type.id] = (player.inventory[block.userData.type.id] || 0) + 2;
+                    updateInventoryDisplay();
                     
-                    let newPos = { x: bx, y: by, z: bz };
-                    
-                    if (absDx > absDy && absDx > absDz) {
-                        // Face X
-                        newPos.x = bx + (dx > 0 ? 1 : -1);
-                    } else if (absDy > absDx && absDy > absDz) {
-                        // Face Y
-                        newPos.y = by + (dy > 0 ? 1 : -1);
-                    } else {
-                        // Face Z
-                        newPos.z = bz + (dz > 0 ? 1 : -1);
-                    }
-                    
-                    createBlock(newPos.x, newPos.y, newPos.z, player.selectedBlockType);
+                    scene.remove(block);
+                    blocks = blocks.filter(b => b !== block);
+                    fallingBlocks = fallingBlocks.filter(b => b !== block);
                 }
                 
                 scene.remove(proj);
                 projectiles.splice(i, 1);
+                hitBlock = true;
                 break;
             }
         }
         
-        // Remover se tempo acabou
+        if (hitBlock) continue;
+        
         if (proj.userData.lifeTime <= 0) {
             scene.remove(proj);
             projectiles.splice(i, 1);
@@ -841,11 +1023,9 @@ function onMouseDown(event) {
     if (document.pointerLockElement !== document.body) return;
     
     if (event.button === 0) {
-        // Botão esquerdo - disparar projétil para quebrar
         createProjectile('break');
     } else if (event.button === 2) {
-        // Botão direito - disparar projétil para colocar
-        createProjectile('place');
+        placeBlock();
     }
 }
 

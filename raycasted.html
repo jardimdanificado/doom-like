@@ -355,8 +355,8 @@ function renderNPCs(zBuffer) {
 // Update
 function update() {
     // Rotação
-    if (keys[37]) player.angle += ROT_SPEED;
-    if (keys[39]) player.angle -= ROT_SPEED;
+    if (keys[39]) player.angle += ROT_SPEED;
+    if (keys[37]) player.angle -= ROT_SPEED;
     
     // Movimento
     const forward = { x: Math.cos(player.angle), y: Math.sin(player.angle) };
