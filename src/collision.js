@@ -1,4 +1,4 @@
-import CONFIG from './config.js';
+import CONFIG from '../data/config.js';
 
 
 export function checkCollision(world, x, y, z, entity) {

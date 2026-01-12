@@ -1,5 +1,5 @@
-import CONFIG from './config.js';
-import BLOCK_TYPES from './blocks.js';
+import CONFIG from '../data/config.js';
+import BLOCK_TYPES from '../data/blocks.js';
 
 export default {
     entities: [],
@@ -66,7 +66,6 @@ export default {
             z: z,
             type: blockType,
             solid: blockType.solid,
-            hasGravity: blockType.hasGravity || false,
             velocityY: 0,
             hp: blockType.maxHP,
             maxHP: blockType.maxHP,
@@ -179,7 +178,7 @@ export default {
         return entity;
     },
     
-    removeEntity(entity, updateInventoryDisplayFn) {
+    removeEntity(entity) {
         const index = this.entities.indexOf(entity);
         if (index > -1) {
             if (entity.mesh) {
@@ -192,7 +191,6 @@ export default {
             } else if (this.playerEntityIndex === index) {
                 this.playerEntityIndex = 0;
                 console.log(`Voltando controle para: ${this.entities[0].name}`);
-                if (updateInventoryDisplayFn) updateInventoryDisplayFn(this);
             }
         }
     }

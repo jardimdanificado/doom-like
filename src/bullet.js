@@ -1,6 +1,5 @@
-import CONFIG from './config.js';
-import BLOCK_TYPES from './blocks.js';
-import { updateInventoryDisplay } from './ui.js';
+import CONFIG from '../data/config.js';
+import BLOCK_TYPES from '../data/blocks.js';
 
 export function createProjectile(world) {
     const player = world.getPlayerEntity();
@@ -14,7 +13,7 @@ export function createProjectile(world) {
     }
     
     player.inventory[player.selectedBlockType.id] = (player.inventory[player.selectedBlockType.id] || 0) - 1;
-    updateInventoryDisplay(world);
+    ////updateInventoryDisplay(world);
     
     const damage = player.selectedBlockType.breakDamage;
     
@@ -55,7 +54,7 @@ export function placeBlock(world) {
     const newBlock = world.addBlock(x, y, z, player.selectedBlockType, false);
     if (newBlock) {
         player.inventory[player.selectedBlockType.id] = (player.inventory[player.selectedBlockType.id] || 0) - 1;
-        updateInventoryDisplay(world);
+        //updateInventoryDisplay(world);
         console.log(`Bloco de ${player.selectedBlockType.name} colocado!`);
     } else {
         console.log('Posição já ocupada!');
@@ -105,11 +104,11 @@ export function updateProjectiles(world) {
                     if (entity.isHostile && playerEntity && playerEntity.inventory) {
                         playerEntity.inventory[BLOCK_TYPES.STONE.id] = 
                             (playerEntity.inventory[BLOCK_TYPES.STONE.id] || 0) + 10;
-                        updateInventoryDisplay(world);
+                        //updateInventoryDisplay(world);
                         console.log('Você ganhou 10 pedras!');
                     }
                     
-                    world.removeEntity(entity, updateInventoryDisplay);
+                    world.removeEntity(entity);
                 }
                 
                 world._internal.scene.remove(proj.mesh);
@@ -156,7 +155,7 @@ export function updateProjectiles(world) {
                     if (playerEntity && playerEntity.inventory) {
                         playerEntity.inventory[block.type.id] = 
                             (playerEntity.inventory[block.type.id] || 0) + 2;
-                        updateInventoryDisplay(world);
+                        //updateInventoryDisplay(world);
                     }
                     
                     world.removeBlock(block);
