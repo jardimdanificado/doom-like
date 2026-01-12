@@ -48,7 +48,7 @@ export default {
         textures: {
             all: 'gold'
         },
-        onUse: function(block) {
+        onUse: function(world, block, creature) {
             console.log('Bloco de ouro ativado!');
             block.material.forEach(mat => {
                 mat.emissive = new THREE.Color(0xFFD700);
@@ -72,7 +72,7 @@ export default {
         textures: {
             all: 'door'
         },
-        onUse: function(block) {
+        onUse: function(world, block, creature) {
             if (block.userData.solid) {
                 block.userData.solid = false;
                 block.material.forEach(mat => {
