@@ -1,21 +1,18 @@
 function createMessageMesh(text) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
-    const fontSize = 32;
-    const padding = 16;
-    ctx.font = `${fontSize}px monospace`;
+    const fontSize = 28;
+    const padding = 12;
+    ctx.font = `${fontSize}px "Courier New", monospace`;
     const metrics = ctx.measureText(text);
     const textWidth = Math.ceil(metrics.width);
-    canvas.width = Math.max(256, textWidth + padding * 2);
-    canvas.height = 128;
-    ctx.font = `${fontSize}px monospace`;
+    canvas.width = Math.max(220, textWidth + padding * 2);
+    canvas.height = 96;
+    ctx.font = `${fontSize}px "Courier New", monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
-    ctx.lineWidth = 4;
-    ctx.strokeText(text, canvas.width / 2, canvas.height / 2);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.fillText(text, canvas.width / 2 + 2, canvas.height / 2 + 2);
     ctx.fillStyle = 'white';
     ctx.fillText(text, canvas.width / 2, canvas.height / 2);
     

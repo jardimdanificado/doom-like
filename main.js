@@ -49,6 +49,7 @@ async function init() {
     world.mode = getModeFromLocation();
     document.body.dataset.mode = world.mode;
     ensureItemLabel();
+    ensureHud();
     
     await initAudio();
     
@@ -271,6 +272,23 @@ function ensureItemLabel() {
     label.style.fontSize = '14px';
     label.style.zIndex = '10';
     document.body.appendChild(label);
+}
+
+function ensureHud() {
+    if (document.getElementById('hud')) return;
+    const hud = document.createElement('div');
+    hud.id = 'hud';
+    hud.textContent = 'HP: -\nItem: -\nCoins: -';
+    hud.style.position = 'fixed';
+    hud.style.top = '10px';
+    hud.style.left = '10px';
+    hud.style.color = 'white';
+    hud.style.textShadow = '2px 2px 4px rgba(0,0,0,0.8)';
+    hud.style.fontSize = '14px';
+    hud.style.lineHeight = '1.4';
+    hud.style.whiteSpace = 'pre-line';
+    hud.style.zIndex = '10';
+    document.body.appendChild(hud);
 }
 
 function getModeFromLocation() {
@@ -514,6 +532,13 @@ function applyMap(world, payload) {
     }
     
     let spawnBlock = world.blocks.find((block) => block.type && block.type.id === BLOCK_TYPES.PLAYER_SPAWN.id);
+    if (spawnBlock) {
+        world._internal.mapCenter = { x: spawnBlock.x, z: spawnBlock.z };
+    } else if (payload.player) {
+        world._internal.mapCenter = { x: payload.player.x, z: payload.player.z };
+    } else {
+        world._internal.mapCenter = { x: 0, z: 0 };
+    }
     const player = world.getPlayerEntity();
     if (spawnBlock && player) {
         player.x = spawnBlock.x;
@@ -570,31 +595,19 @@ function dropSelectedBlock(world) {
     if (world.mode !== 'editor') {
         player.inventory[player.selectedBlockType.id] = count - 1;
     }
-    spawnBlockDrop(world, player.selectedBlockType, 1, {
-        x: player.x,
-        y: player.y + 0.5,
-        z: player.z
-    });
-}
-
-function dropFirstItem(world) {
-    const player = world.getPlayerEntity();
-    if (!player) return;
-    
-    const itemIds = Object.keys(player.itemInventory);
-    if (itemIds.length === 0 && world.mode !== 'editor') return;
-    
-    const itemId = itemIds[0] || ITEMS.COIN.id;
-    const count = player.itemInventory[itemId] || 0;
-    if (count <= 0 && world.mode !== 'editor') return;
-    
-    if (world.mode !== 'editor') {
-        player.itemInventory[itemId] = count - 1;
-    }
-    spawnItemDrop(world, itemId, 1, {
-        x: player.x,
-        y: player.y + 0.5,
-        z: player.z
+    const forward = new THREE.Vector3();
+    world._internal.camera.getWorldDirection(forward);
+    const dropPos = {
+        x: player.x + forward.x * 0.6,
+        y: player.y + 1.1,
+        z: player.z + forward.z * 0.6
+    };
+    const throwVelocity = forward.clone().multiplyScalar(0.5);
+    spawnBlockDrop(world, player.selectedBlockType, 1, dropPos, {
+        ignoreEntityId: player.id,
+        ignoreUntil: performance.now() + 300,
+        velocityY: 0,
+        velocity: throwVelocity
     });
 }
 
@@ -677,6 +690,11 @@ function applySelection(world, entry) {
 function updateCurrentItemLabel(world) {
     const label = document.getElementById('current-item');
     if (!label) return;
+    if (world.mode === 'shooter') {
+        label.style.display = 'none';
+        return;
+    }
+    label.style.display = 'block';
     const player = world.getPlayerEntity();
     if (!player) {
         label.textContent = 'Item: -';
@@ -709,6 +727,48 @@ function updateCurrentItemLabel(world) {
             label.textContent = `Item: Spawn ${npcType ? npcType.name : '-'}`;
         }
     }
+}
+
+function updateHud(world) {
+    const hud = document.getElementById('hud');
+    if (!hud) return;
+    if (world.mode !== 'shooter') {
+        hud.style.display = 'none';
+        return;
+    }
+    hud.style.display = 'block';
+    
+    const player = world.getPlayerEntity();
+    if (!player) {
+        hud.textContent = 'HP: -\nItem: -\nCoins: -';
+        return;
+    }
+    
+    const hpMax = player.maxHP || 0;
+    const hp = typeof player.hp === 'number' ? player.hp : 0;
+    let itemName = '-';
+    let itemCount = '-';
+    if (!player.selectedItem && player.selectedBlockType) {
+        player.selectedItem = { kind: 'block', id: player.selectedBlockType.id };
+    }
+    if (player.selectedItem) {
+        if (player.selectedItem.kind === 'block') {
+            itemName = player.selectedBlockType ? player.selectedBlockType.name : '-';
+            itemCount = player.selectedBlockType && player.inventory
+                ? (player.inventory[player.selectedBlockType.id] || 0)
+                : 0;
+        } else if (player.selectedItem.kind === 'item') {
+            const itemDef = Object.values(ITEMS).find((item) => item.id === player.selectedItem.id);
+            itemName = itemDef ? itemDef.name : '-';
+            itemCount = itemDef && player.itemInventory ? (player.itemInventory[itemDef.id] || 0) : 0;
+        } else if (player.selectedItem.kind === 'entity') {
+            itemName = 'Spawner';
+            itemCount = '-';
+        }
+    }
+    
+    const coins = player.itemInventory ? (player.itemInventory.coin || 0) : 0;
+    hud.textContent = `HP: ${hp}/${hpMax}\nItem: ${itemName} x${itemCount}\nCoins: ${coins}`;
 }
 
 // Modifique o onKeyDown para usar o marcador visual:
@@ -758,9 +818,6 @@ function onKeyDown(world, e) {
         }
         if (e.code === 'KeyQ') {
             dropSelectedBlock(world);
-        }
-        if (e.code === 'KeyF') {
-            dropFirstItem(world);
         }
     } else {
         if (e.code === 'KeyQ') {
@@ -872,6 +929,7 @@ function animate(world) {
         updateMessages(world);
         checkInteractionTarget(world);
         updateCurrentItemLabel(world);
+        updateHud(world);
         
         // Atualiza câmera e listener de áudio
         const player = world.getPlayerEntity();

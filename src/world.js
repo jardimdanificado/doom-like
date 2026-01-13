@@ -22,7 +22,8 @@ export default {
         raycaster: new THREE.Raycaster(),
         blockTextures: {},
         texturesLoaded: false,
-        keys: {}
+        keys: {},
+        mapCenter: { x: 0, z: 0 }
     },
     
     getPlayerEntity() {

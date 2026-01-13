@@ -179,6 +179,10 @@ export function updateProjectiles(world) {
                             z: entity.z
                         });
                     }
+
+                    if (entity.type !== 'player') {
+                        dropEntityInventory(world, entity);
+                    }
                     
                     world.removeEntity(entity);
                 }
@@ -249,4 +253,58 @@ export function updateProjectiles(world) {
             world.projectiles.splice(i, 1);
         }
     }
+}
+
+function dropEntityInventory(world, entity) {
+    const base = { x: entity.x, y: entity.y + 0.3, z: entity.z };
+    const drops = [];
+    
+    if (entity.inventory) {
+        for (const [blockId, count] of Object.entries(entity.inventory)) {
+            const qty = Math.max(0, Math.floor(Number(count) || 0));
+            if (qty === 0) continue;
+            const blockType = Object.values(BLOCK_TYPES).find(bt => bt.id === Number(blockId));
+            if (!blockType) continue;
+            for (let i = 0; i < qty; i++) {
+                drops.push({ kind: 'block', blockType });
+            }
+        }
+    }
+    
+    if (entity.itemInventory) {
+        for (const [itemId, count] of Object.entries(entity.itemInventory)) {
+            const qty = Math.max(0, Math.floor(Number(count) || 0));
+            if (qty === 0) continue;
+            for (let i = 0; i < qty; i++) {
+                drops.push({ kind: 'item', itemId });
+            }
+        }
+    }
+    
+    if (drops.length === 0) return;
+    
+    for (let i = 0; i < drops.length; i++) {
+        const offset = getSpreadOffset(i, drops.length);
+        const pos = {
+            x: base.x + offset.x,
+            y: base.y,
+            z: base.z + offset.z
+        };
+        const drop = drops[i];
+        if (drop.kind === 'block') {
+            spawnBlockDrop(world, drop.blockType, 1, pos);
+        } else if (drop.kind === 'item') {
+            spawnItemDrop(world, drop.itemId, 1, pos);
+        }
+    }
+}
+
+function getSpreadOffset(index, total) {
+    if (total <= 1) return { x: 0, z: 0 };
+    const angle = (index / total) * Math.PI * 2 + Math.random() * 0.4;
+    const radius = 0.3 + Math.random() * 0.6;
+    return {
+        x: Math.cos(angle) * radius,
+        z: Math.sin(angle) * radius
+    };
 }

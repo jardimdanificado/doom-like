@@ -127,7 +127,7 @@ export default {
         id: 7,
         name: 'Spawn Player',
         solid: false,
-        maxHP: 1,
+        maxHP: 99999999,
         breakDamage: 0,
         isFloor: false,
         render: 'cross',

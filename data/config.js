@@ -1,6 +1,6 @@
 export default {
     TITLE: "unamed game",
-    VERSION: "0.2.1",
+    VERSION: "0.2.2",
     MOVE_SPEED: 0.1,
     CROUCH_SPEED_MULTIPLIER: 0.5,
     LOOK_SPEED: 0.002,
@@ -13,7 +13,11 @@ export default {
     BLOCK_SIZE: 1,
     INTERACTION_RANGE: 3,
     PLACEMENT_RANGE: 5,
-    ITEM_PICKUP_RANGE: 1.2,
+    ITEM_PICKUP_RANGE: 1,
+
+    WORLD_MAX_RADIUS: 30,
+    WORLD_MIN_Y: -10,
+    
     MAX_JUMP_HEIGHT: 1,
     MAX_JUMP_DISTANCE: 2,
     PATH_UPDATE_INTERVAL: 60,

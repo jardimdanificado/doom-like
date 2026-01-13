@@ -266,6 +266,14 @@ export function reconstructPath(cameFrom, current) {
 export function updateEntity(world, entity) {
     const isPlayerControlled = (world.getPlayerEntity() === entity);
     const noClip = !!entity.noClip;
+    const center = world._internal.mapCenter || { x: 0, z: 0 };
+    const dx = entity.x - center.x;
+    const dz = entity.z - center.z;
+    const radius = Math.sqrt(dx * dx + dz * dz);
+    if (radius > CONFIG.WORLD_MAX_RADIUS || entity.y < CONFIG.WORLD_MIN_Y) {
+        world.removeEntity(entity);
+        return;
+    }
     
     // GRAVIDADE para TODAS as entidades (controláveis e hostis)
     if (!noClip)
