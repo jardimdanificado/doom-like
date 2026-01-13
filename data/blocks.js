@@ -68,18 +68,47 @@ export default {
             all: 'door'
         },
         onUse: function(world, block, creature) {
-            if (block.userData.solid) {
-                block.userData.solid = false;
-                block.material.forEach(mat => {
-                    mat.opacity = 0.3;
-                });
-                console.log('Porta aberta!');
-            } else {
-                block.userData.solid = true;
-                block.material.forEach(mat => {
-                    mat.opacity = 0.8;
-                });
-                console.log('Porta fechada!');
+            const isOpening = block.userData.solid;
+            const targetSolid = !isOpening;
+            const visited = new Set();
+            const queue = [{ x: block.userData.x, y: block.userData.y, z: block.userData.z }];
+            
+            while (queue.length > 0) {
+                const current = queue.shift();
+                const key = `${current.x},${current.y},${current.z}`;
+                if (visited.has(key)) continue;
+                visited.add(key);
+                
+                const targetBlock = world.blocks.find((b) =>
+                    Math.abs(b.x - current.x) < 0.01 &&
+                    Math.abs(b.y - current.y) < 0.01 &&
+                    Math.abs(b.z - current.z) < 0.01 &&
+                    b.type.id === 5
+                );
+                if (!targetBlock) continue;
+                
+                targetBlock.solid = targetSolid;
+                if (block.userData &&
+                    Math.abs(block.userData.x - current.x) < 0.01 &&
+                    Math.abs(block.userData.y - current.y) < 0.01 &&
+                    Math.abs(block.userData.z - current.z) < 0.01) {
+                    block.userData.solid = targetSolid;
+                }
+                if (targetBlock.mesh && Array.isArray(targetBlock.mesh.material)) {
+                    targetBlock.mesh.material.forEach(mat => {
+                        mat.opacity = targetSolid ? 0.8 : 0.3;
+                    });
+                }
+                
+                const neighbors = [
+                    { x: current.x + 1, y: current.y, z: current.z },
+                    { x: current.x - 1, y: current.y, z: current.z },
+                    { x: current.x, y: current.y, z: current.z + 1 },
+                    { x: current.x, y: current.y, z: current.z - 1 },
+                    { x: current.x, y: current.y + 1, z: current.z },
+                    { x: current.x, y: current.y - 1, z: current.z }
+                ];
+                queue.push(...neighbors);
             }
         }
     },
@@ -92,6 +121,31 @@ export default {
         isFloor: false,
         textures: {
             all: 'sand'
+        }
+    },
+    PLAYER_SPAWN: {
+        id: 7,
+        name: 'Spawn Player',
+        solid: false,
+        maxHP: 1,
+        breakDamage: 0,
+        isFloor: false,
+        render: 'cross',
+        editorOnly: true,
+        textures: {
+            all: 'gold'
+        }
+    },
+    PLANT: {
+        id: 8,
+        name: 'Planta',
+        solid: false,
+        maxHP: 10,
+        breakDamage: 1,
+        isFloor: false,
+        render: 'cross',
+        textures: {
+            all: 'grass'
         }
     }
 };

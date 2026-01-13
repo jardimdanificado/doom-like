@@ -5,22 +5,10 @@ export default {
     entities: [],
     blocks: [],
     projectiles: [],
+    items: [],
+    messages: [],
     playerEntityIndex: 0,
-    
-    mapData: [
-        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-        [1,0,2,0,0,0,3,3,0,0,0,2,0,0,1],
-        [1,0,0,0,0,0,5,0,0,0,0,0,0,0,1],
-        [1,0,0,0,2,2,0,0,0,3,3,0,6,0,1],
-        [1,0,3,0,2,2,0,0,0,3,3,0,6,0,1],
-        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-        [1,0,0,0,0,0,0,4,0,0,0,0,0,0,1],
-        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-        [1,0,2,0,0,3,3,0,0,0,2,2,0,0,1],
-        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-    ],
+    mode: 'shooter',
     
     ui: {
         interactionTarget: null,
@@ -53,11 +41,19 @@ export default {
             return null;
         }
         
-        const geometry = new THREE.BoxGeometry(CONFIG.BLOCK_SIZE, CONFIG.BLOCK_SIZE, CONFIG.BLOCK_SIZE);
-        const materials = this.createBlockMaterials(blockType);
-        const mesh = new THREE.Mesh(geometry, materials);
+        let mesh = null;
+        if (blockType.render === 'cross') {
+            mesh = this.createCrossMesh(blockType);
+        } else {
+            const geometry = new THREE.BoxGeometry(CONFIG.BLOCK_SIZE, CONFIG.BLOCK_SIZE, CONFIG.BLOCK_SIZE);
+            const materials = this.createBlockMaterials(blockType);
+            mesh = new THREE.Mesh(geometry, materials);
+        }
         
         mesh.position.set(x, y, z);
+        if (blockType.editorOnly && this.mode !== 'editor') {
+            mesh.visible = false;
+        }
         
         const block = {
             mesh: mesh,
@@ -84,9 +80,18 @@ export default {
     removeBlock(block) {
         const index = this.blocks.indexOf(block);
         if (index > -1) {
-            this._internal.scene.remove(block.mesh);
+            if (block.mesh) {
+                this._internal.scene.remove(block.mesh);
+            }
             this.blocks.splice(index, 1);
         }
+    },
+
+    clearBlocks() {
+        for (const block of this.blocks) {
+            this._internal.scene.remove(block.mesh);
+        }
+        this.blocks = [];
     },
     
     isPositionOccupied(x, y, z) {
@@ -108,26 +113,43 @@ export default {
         if (blockType.textures.all) {
             const mat = new THREE.MeshLambertMaterial({ 
                 map: textures[blockType.textures.all],
-                flatShading: true,
                 transparent: blockType.id === BLOCK_TYPES.DOOR.id,
                 opacity: blockType.id === BLOCK_TYPES.DOOR.id ? 0.8 : 1
             });
             return [mat, mat, mat, mat, mat, mat];
         } else if (blockType.textures.top) {
             const topMat = new THREE.MeshLambertMaterial({ 
-                map: textures[blockType.textures.top],
-                flatShading: true
+                map: textures[blockType.textures.top]
             });
             const sideMat = new THREE.MeshLambertMaterial({ 
-                map: textures[blockType.textures.side],
-                flatShading: true
+                map: textures[blockType.textures.side]
             });
             const bottomMat = new THREE.MeshLambertMaterial({ 
-                map: textures[blockType.textures.bottom],
-                flatShading: true
+                map: textures[blockType.textures.bottom]
             });
             return [sideMat, sideMat, topMat, bottomMat, sideMat, sideMat];
         }
+    },
+    createCrossMesh(blockType) {
+        const textures = this._internal.blockTextures;
+        const textureKey = blockType.textures && (blockType.textures.all || blockType.textures.top);
+        const texture = textureKey ? textures[textureKey] : null;
+        const size = CONFIG.BLOCK_SIZE;
+        const geometry = new THREE.PlaneGeometry(size, size);
+        const material = new THREE.MeshLambertMaterial({
+            map: texture || null,
+            transparent: true,
+            side: THREE.DoubleSide,
+            alphaTest: 0.1
+        });
+        const planeA = new THREE.Mesh(geometry, material);
+        const planeB = new THREE.Mesh(geometry, material.clone());
+        planeA.rotation.y = Math.PI / 4;
+        planeB.rotation.y = -Math.PI / 4;
+        const group = new THREE.Group();
+        group.add(planeA);
+        group.add(planeB);
+        return group;
     },
     addEntity(entityData) {
         const entity = {
@@ -153,6 +175,7 @@ export default {
             isInteractable: entityData.isInteractable !== false,
             
             inventory: entityData.inventory || null,
+            itemInventory: entityData.itemInventory || {},
             selectedBlockType: entityData.selectedBlockType || BLOCK_TYPES.GRASS,
             
             mesh: entityData.mesh || null,
@@ -162,6 +185,7 @@ export default {
             
             npcData: entityData.npcData || null,
             audioInstance: entityData.audioInstance || null,
+            npcTypeId: entityData.npcTypeId || null,
             
             // Sistema de pathfinding
             target: entityData.target || null,
@@ -172,7 +196,8 @@ export default {
             // Sistema de combate
             isHostile: entityData.isHostile || false,
             shootCooldown: 0,
-            targetEntity: null // Entidade alvo para hostis
+            targetEntity: null,
+            blockInteractCooldown: 0
         };
         
         this.entities.push(entity);

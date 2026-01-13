@@ -1,25 +1,62 @@
 import CONFIG from '../data/config.js';
 import BLOCK_TYPES from '../data/blocks.js';
+import ITEMS from '../data/items.js';
+import { spawnBlockDrop, spawnItemDrop } from './item.js';
+
+function createBlockMaterials(world, blockType) {
+    const textures = world._internal.blockTextures;
+    
+    if (blockType.textures.all) {
+        const mat = new THREE.MeshLambertMaterial({ 
+            map: textures[blockType.textures.all],
+            transparent: blockType.id === BLOCK_TYPES.DOOR.id,
+            opacity: blockType.id === BLOCK_TYPES.DOOR.id ? 0.8 : 1
+        });
+        return [mat, mat, mat, mat, mat, mat];
+    }
+    
+    if (blockType.textures.top) {
+        const topMat = new THREE.MeshLambertMaterial({ 
+            map: textures[blockType.textures.top]
+        });
+        const sideMat = new THREE.MeshLambertMaterial({ 
+            map: textures[blockType.textures.side]
+        });
+        const bottomMat = new THREE.MeshLambertMaterial({ 
+            map: textures[blockType.textures.bottom]
+        });
+        return [sideMat, sideMat, topMat, bottomMat, sideMat, sideMat];
+    }
+    
+    const fallback = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    return [fallback, fallback, fallback, fallback, fallback, fallback];
+}
 
 export function createProjectile(world) {
     const player = world.getPlayerEntity();
-    if (!player || !player.inventory) return;
+    if (!player) return;
+    const isEditor = player.isEditor || world.mode === 'editor';
     
-    const ammoCount = player.inventory[player.selectedBlockType.id] || 0;
+    if (player.selectedItem && player.selectedItem.kind !== 'block') return;
+    if (!player.selectedBlockType) return;
+
+    const ammoCount = player.inventory ? (player.inventory[player.selectedBlockType.id] || 0) : 0;
     
-    if (ammoCount <= 0) {
+    if (!isEditor && ammoCount <= 0) {
         console.log(`Sem munição de ${player.selectedBlockType.name}!`);
         return;
     }
     
-    player.inventory[player.selectedBlockType.id] = (player.inventory[player.selectedBlockType.id] || 0) - 1;
+    if (!isEditor) {
+        player.inventory[player.selectedBlockType.id] = (player.inventory[player.selectedBlockType.id] || 0) - 1;
+    }
     ////updateInventoryDisplay(world);
     
     const damage = player.selectedBlockType.breakDamage;
     
-    const geometry = new THREE.SphereGeometry(0.1, 8, 8);
-    const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-    const mesh = new THREE.Mesh(geometry, material);
+    const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+    const materials = createBlockMaterials(world, player.selectedBlockType);
+    const mesh = new THREE.Mesh(geometry, materials);
     
     mesh.position.copy(world._internal.camera.position);
     
@@ -30,7 +67,8 @@ export function createProjectile(world) {
         mesh: mesh,
         velocity: direction.multiplyScalar(0.5),
         damage: damage,
-        lifeTime: 100
+        lifeTime: 100,
+        shooter: player
     };
     
     world._internal.scene.add(mesh);
@@ -39,12 +77,44 @@ export function createProjectile(world) {
 
 export function placeBlock(world) {
     const player = world.getPlayerEntity();
-    if (!player || !player.inventory) return;
+    if (!player) return;
     if (!world.ui.targetBlockPosition) return;
+    const isEditor = player.isEditor || world.mode === 'editor';
     
-    const ammoCount = player.inventory[player.selectedBlockType.id] || 0;
+    if (player.selectedItem && player.selectedItem.kind !== 'block') return;
+    if (!player.selectedBlockType) return;
+
+    const ammoCount = player.inventory ? (player.inventory[player.selectedBlockType.id] || 0) : 0;
+    if (world.mode === 'shooter') {
+        const blockHalf = CONFIG.BLOCK_SIZE / 2;
+        const target = world.ui.targetBlockPosition;
+        const blockBox = {
+            minX: target.x - blockHalf,
+            maxX: target.x + blockHalf,
+            minY: target.y - blockHalf,
+            maxY: target.y + blockHalf,
+            minZ: target.z - blockHalf,
+            maxZ: target.z + blockHalf
+        };
+        const height = player.isCrouching ? CONFIG.ENTITY_HEIGHT_CROUCHED : CONFIG.ENTITY_HEIGHT;
+        const playerBox = {
+            minX: player.x - CONFIG.ENTITY_RADIUS,
+            maxX: player.x + CONFIG.ENTITY_RADIUS,
+            minY: player.y,
+            maxY: player.y + height,
+            minZ: player.z - CONFIG.ENTITY_RADIUS,
+            maxZ: player.z + CONFIG.ENTITY_RADIUS
+        };
+        const overlap = playerBox.maxX > blockBox.minX &&
+            playerBox.minX < blockBox.maxX &&
+            playerBox.maxY > blockBox.minY &&
+            playerBox.minY < blockBox.maxY &&
+            playerBox.maxZ > blockBox.minZ &&
+            playerBox.minZ < blockBox.maxZ;
+        if (overlap) return;
+    }
     
-    if (ammoCount <= 0) {
+    if (!isEditor && ammoCount <= 0) {
         console.log(`Sem blocos de ${player.selectedBlockType.name}!`);
         return;
     }
@@ -53,7 +123,9 @@ export function placeBlock(world) {
     
     const newBlock = world.addBlock(x, y, z, player.selectedBlockType, false);
     if (newBlock) {
-        player.inventory[player.selectedBlockType.id] = (player.inventory[player.selectedBlockType.id] || 0) - 1;
+        if (!isEditor) {
+            player.inventory[player.selectedBlockType.id] = (player.inventory[player.selectedBlockType.id] || 0) - 1;
+        }
         //updateInventoryDisplay(world);
         console.log(`Bloco de ${player.selectedBlockType.name} colocado!`);
     } else {
@@ -74,6 +146,7 @@ export function updateProjectiles(world) {
         for (let entity of world.entities) {
             // Não atira em quem atirou
             if (proj.shooter && entity === proj.shooter) continue;
+            if (entity.isEditor) continue;
             
             // Verifica distância (funciona mesmo sem mesh visível)
             const dx = proj.mesh.position.x - entity.x;
@@ -99,13 +172,12 @@ export function updateProjectiles(world) {
                 if (entity.hp <= 0) {
                     console.log(`${entity.name} foi derrotado!`);
                     
-                    // Se derrotar um hostil, dropar itens
-                    const playerEntity = world.getPlayerEntity();
-                    if (entity.isHostile && playerEntity && playerEntity.inventory) {
-                        playerEntity.inventory[BLOCK_TYPES.STONE.id] = 
-                            (playerEntity.inventory[BLOCK_TYPES.STONE.id] || 0) + 10;
-                        //updateInventoryDisplay(world);
-                        console.log('Você ganhou 10 pedras!');
+                    if (entity.isHostile && world.mode === 'shooter') {
+                        spawnItemDrop(world, ITEMS.COIN.id, 5, {
+                            x: entity.x,
+                            y: entity.y + 0.3,
+                            z: entity.z
+                        });
                     }
                     
                     world.removeEntity(entity);
@@ -151,11 +223,12 @@ export function updateProjectiles(world) {
                 if (block.hp <= 0) {
                     console.log(`${block.type.name} destruído!`);
                     
-                    const playerEntity = world.getPlayerEntity();
-                    if (playerEntity && playerEntity.inventory) {
-                        playerEntity.inventory[block.type.id] = 
-                            (playerEntity.inventory[block.type.id] || 0) + 2;
-                        //updateInventoryDisplay(world);
+                    if (world.mode === 'shooter') {
+                        spawnBlockDrop(world, block.type, 1, {
+                            x: block.x,
+                            y: block.y + 0.3,
+                            z: block.z
+                        });
                     }
                     
                     world.removeBlock(block);

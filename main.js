@@ -4,12 +4,16 @@
 import CONFIG from "./data/config.js"
 import NPC_TYPES from "./data/npcs.js"
 import BLOCK_TYPES from "./data/blocks.js"
+import ITEMS from "./data/items.js"
 import texturesToLoad from "./data/textures.js"
 import world from "./src/world.js"
-import { updateEntity, updateHostileAI, checkInteractionTarget } from "./src/entity.js"
+import { updateEntity, checkInteractionTarget } from "./src/entity.js"
 import { handleInteraction } from './src/entity.js';
 import { createProjectile, placeBlock } from './src/bullet.js';
 import { updateProjectiles } from './src/bullet.js';
+import { updateItems, spawnBlockDrop, spawnItemDrop } from './src/item.js';
+import { useItem } from './src/item.js';
+import { spawnMessage, updateMessages } from './src/message.js';
 import audioSystem from './src/audio.js';
 
 // ============================================================
@@ -42,6 +46,9 @@ async function init() {
     world._internal.scene = scene;
     world._internal.camera = camera;
     world._internal.renderer = renderer;
+    world.mode = getModeFromLocation();
+    document.body.dataset.mode = world.mode;
+    ensureItemLabel();
     
     await initAudio();
     
@@ -50,6 +57,7 @@ async function init() {
     window.addEventListener('resize', () => onWindowResize(world));
     document.addEventListener('keydown', (e) => onKeyDown(world, e));
     document.addEventListener('keyup', (e) => world._internal.keys[e.code] = false);
+    document.addEventListener('wheel', (e) => onWheel(world, e), { passive: false });
     
     document.addEventListener('click', () => {
         document.body.requestPointerLock();
@@ -94,8 +102,7 @@ function loadTextures(world) {
         loaded++;
         if (loaded === total) {
             world._internal.texturesLoaded = true;
-            createWorld(world);
-            createEntities(world);
+            initWorld(world);
         }
     }
     
@@ -136,31 +143,26 @@ function loadTextures(world) {
 // ============================================================
 // CRIAÇÃO DO MUNDO E ENTIDADES
 // ============================================================
-function createWorld(world) {
-    const MAP_W = world.mapData[0].length;
-    const MAP_H = world.mapData.length;
-    
-    for (let z = 0; z < MAP_H; z++) {
-        for (let x = 0; x < MAP_W; x++) {
-            const typeId = world.mapData[z][x];
-            
-            world.addBlock( x, -0.5, z, BLOCK_TYPES.STONE, false);
-            
-            if (typeId > 0) {
-                const blockType = Object.values(BLOCK_TYPES).find(bt => bt.id === typeId);
-                if (blockType) {
-                    world.addBlock( x, 0.5, z, blockType, false);
-                    
-                    if (typeId === 1 || Math.random() < 0.2) {
-                        world.addBlock( x, 1.5, z, blockType, false);
-                    }
-                }
-            }
-        }
+async function initWorld(world) {
+    createPlayer(world);
+    if (world.mode === 'editor') {
+        const payload = buildEditorDefaultMap();
+        applyMap(world, payload);
+    } else {
+        await loadInitialMap(world);
     }
+    updateCurrentItemLabel(world);
 }
 
-function createEntities(world) {
+function createPlayer(world) {
+    const isEditor = world.mode === 'editor';
+    const editorInventory = {};
+    if (isEditor) {
+        Object.values(BLOCK_TYPES).forEach((blockType) => {
+            editorInventory[blockType.id] = 999;
+        });
+    }
+
     world.addEntity({
         name: 'Player',
         type: 'player',
@@ -169,8 +171,9 @@ function createEntities(world) {
         z: 5.5,
         isControllable: true,
         isInteractable: false,
-        isEditor: true,
-        inventory: {
+        isEditor: isEditor,
+        noClip: isEditor,
+        inventory: isEditor ? editorInventory : {
             [BLOCK_TYPES.STONE.id]: 20,
             [BLOCK_TYPES.GRASS.id]: 30,
             [BLOCK_TYPES.WOOD.id]: 25,
@@ -178,60 +181,71 @@ function createEntities(world) {
             [BLOCK_TYPES.DOOR.id]: 15,
             [BLOCK_TYPES.SAND.id]: 20
         },
+        itemInventory: {},
         selectedBlockType: BLOCK_TYPES.GRASS,
-        npcData: NPC_TYPES.VILLAGER
+        selectedItem: { kind: 'block', id: BLOCK_TYPES.GRASS.id },
+        npcData: null,
+        hp: isEditor ? 999999 : 100,
+        maxHP: isEditor ? 999999 : 100
     });
-    
-    const npcSpawns = [
-        { x: 3.5, z: 3.5, type: NPC_TYPES.VILLAGER },
-        { x: 10.5, z: 5.5, type: NPC_TYPES.GUARD },
-        { x: 7.5, z: 8.5, type: NPC_TYPES.MERCHANT }
-    ];
-    
-    npcSpawns.forEach(spawn => {
-        world.addEntity({
-            name: spawn.type.name,
-            type: 'npc',
-            x: spawn.x,
-            y: 2,
-            z: spawn.z,
-            hp: spawn.type.maxHP,
-            maxHP: spawn.type.maxHP,
-            isControllable: true,
-            isInteractable: true,
-            npcData: spawn.type,
-            inventory: {
-                [BLOCK_TYPES.STONE.id]: 50,
-                [BLOCK_TYPES.GRASS.id]: 10,
-                [BLOCK_TYPES.WOOD.id]: 10
-            },
-            selectedBlockType: BLOCK_TYPES.STONE,
-            target: { x: spawn.x + 3, y: 2, z: spawn.z + 3 },
-            onInteract: (world, entity) => {
-                const dialogue = entity.npcData.dialogue;
-                if (entity.audioInstance) {
-                    audioSystem.stopEvent(entity.audioInstance, true);
-                    entity.audioInstance = null;
-                }
+}
 
-                audioSystem.playEvent('event:/teste', {}, { autoStart: true }).then((instance) => {
-                    if (!instance) return;
-                    audioSystem.attachEvent(instance, {
-                        relative: entity,
-                        offset: { x: 0, y: 1.6, z: 0 }
-                    });
-                    entity.audioInstance = instance;
-                });
-
-                alert(`${entity.name}: ${dialogue}`);
-
-                if (entity.audioInstance) {
-                    audioSystem.stopEvent(entity.audioInstance, true);
-                    entity.audioInstance = null;
-                }
+function createNpcEntity(world, npcType, position) {
+    const entity = world.addEntity({
+        name: npcType.name,
+        type: 'npc',
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        hp: npcType.maxHP,
+        maxHP: npcType.maxHP,
+        isControllable: true,
+        isInteractable: true,
+        npcData: npcType,
+        npcTypeId: npcType.id,
+        inventory: {
+            [BLOCK_TYPES.STONE.id]: 50,
+            [BLOCK_TYPES.GRASS.id]: 10,
+            [BLOCK_TYPES.WOOD.id]: 10
+        },
+        selectedBlockType: BLOCK_TYPES.STONE,
+        target: null,
+        onInteract: (world, entity) => {
+            const dialogue = entity.npcData.dialogue;
+            if (entity.audioInstance) {
+                audioSystem.stopEvent(entity.audioInstance, true);
+                entity.audioInstance = null;
             }
-        });
+
+            audioSystem.playEvent('event:/teste', {}, { autoStart: true }).then((instance) => {
+                if (!instance) return;
+                audioSystem.attachEvent(instance, {
+                    relative: entity,
+                    offset: { x: 0, y: 1.6, z: 0 }
+                });
+                entity.audioInstance = instance;
+            });
+            
+            spawnMessage(world, `${entity.name}: ${dialogue}`, {
+                relative: entity,
+                offset: { x: 0, y: 1.9, z: 0 },
+                duration: 2500
+            });
+
+            setTimeout(() => {
+                if (entity.audioInstance) {
+                    audioSystem.stopEvent(entity.audioInstance, true);
+                    entity.audioInstance = null;
+                }
+            }, 2400);
+        }
     });
+
+    return entity;
+}
+
+function getNpcTypeById(id) {
+    return Object.values(NPC_TYPES).find((type) => type.id === id) || null;
 }
 
 // ============================================================
@@ -244,33 +258,456 @@ export function selectBlockType(world, blockType) {
     }
 }
 
-// Variáveis globais (adicione no topo do main.js)
-let fixedSoundPosition = null;
-let soundMarker = null;
+function ensureItemLabel() {
+    if (document.getElementById('current-item')) return;
+    const label = document.createElement('div');
+    label.id = 'current-item';
+    label.textContent = 'Item: -';
+    label.style.position = 'fixed';
+    label.style.top = '10px';
+    label.style.right = '10px';
+    label.style.color = 'white';
+    label.style.textShadow = '2px 2px 4px rgba(0,0,0,0.8)';
+    label.style.fontSize = '14px';
+    label.style.zIndex = '10';
+    document.body.appendChild(label);
+}
 
-// Função para criar/atualizar marcador visual
-function updateSoundMarker(world, position) {
-    const scene = world._internal.scene;
+function getModeFromLocation() {
+    if (window.__MODE__ === 'editor' || window.__MODE__ === 'shooter') {
+        return window.__MODE__;
+    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get('mode') === 'editor' ? 'editor' : 'shooter';
+}
+
+function removeTargetBlock(world) {
+    const camera = world._internal.camera;
+    const raycaster = world._internal.raycaster;
+    const blockMeshes = world.blocks.map(b => b.mesh);
+    if (blockMeshes.length === 0) return;
     
-    // Remove marcador antigo
-    if (soundMarker) {
-        scene.remove(soundMarker);
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const intersects = raycaster.intersectObjects(blockMeshes, true);
+    if (intersects.length === 0) return;
+    
+    const hitMesh = intersects[0].object;
+    const block = world.blocks.find(b => matchesMesh(hitMesh, b.mesh));
+    if (block) {
+        world.removeBlock(block);
+    }
+}
+
+function removeTargetEntity(world) {
+    const camera = world._internal.camera;
+    const raycaster = world._internal.raycaster;
+    const entityMeshes = world.entities
+        .filter((e) => e.mesh && e.type !== 'player')
+        .map((e) => e.mesh);
+    if (entityMeshes.length === 0) return;
+    
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const intersects = raycaster.intersectObjects(entityMeshes, true);
+    if (intersects.length === 0) return;
+    
+    const hitMesh = intersects[0].object;
+    const entity = world.entities.find((e) => matchesMesh(hitMesh, e.mesh));
+    if (entity && entity.type !== 'player') {
+        world.removeEntity(entity);
+        return true;
+    }
+    return false;
+}
+
+function removeTargetItem(world) {
+    const camera = world._internal.camera;
+    const raycaster = world._internal.raycaster;
+    const itemMeshes = world.items.map((item) => item.mesh);
+    if (itemMeshes.length === 0) return false;
+    
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const intersects = raycaster.intersectObjects(itemMeshes, true);
+    if (intersects.length === 0) return false;
+    
+    const hitMesh = intersects[0].object;
+    const itemIndex = world.items.findIndex((item) => matchesMesh(hitMesh, item.mesh));
+    if (itemIndex >= 0) {
+        const item = world.items[itemIndex];
+        world._internal.scene.remove(item.mesh);
+        world.items.splice(itemIndex, 1);
+        return true;
+    }
+    return false;
+}
+
+function matchesMesh(object, mesh) {
+    let current = object;
+    while (current) {
+        if (current === mesh) return true;
+        current = current.parent;
+    }
+    return false;
+}
+
+function buildEditorDefaultMap() {
+    const blocks = [];
+    const size = 16;
+    for (let z = 0; z < size; z++) {
+        for (let x = 0; x < size; x++) {
+            blocks.push({
+                x,
+                y: -0.5,
+                z,
+                typeId: BLOCK_TYPES.GRASS.id,
+                isFloor: true
+            });
+        }
+    }
+    blocks.push({
+        x: Math.floor(size / 2),
+        y: 0.5,
+        z: Math.floor(size / 2),
+        typeId: BLOCK_TYPES.PLAYER_SPAWN.id,
+        isFloor: false
+    });
+    return {
+        version: 1,
+        player: { x: 7.5, y: 2, z: 7.5, yaw: 0, pitch: 0 },
+        blocks,
+        items: [],
+        entities: []
+    };
+}
+
+async function loadInitialMap(world) {
+    await loadMapFromUrl(world, './data/maps/default.json');
+}
+
+async function loadMapFromUrl(world, url) {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Map fetch failed: ${response.status}`);
+        const payload = await response.json();
+        applyMap(world, payload);
+    } catch (err) {
+        console.warn('Falha ao carregar mapa, usando default:', err);
+        applyMap(world, buildEditorDefaultMap());
+    }
+}
+
+function exportMap(world) {
+    const payload = {
+        version: 1,
+        player: null,
+        blocks: world.blocks.map((block) => ({
+            x: block.x,
+            y: block.y,
+            z: block.z,
+            typeId: block.type.id,
+            isFloor: block.isFloor
+        })),
+        items: world.items.map((item) => ({
+            kind: item.kind,
+            blockTypeId: item.blockTypeId || null,
+            itemId: item.itemId || null,
+            amount: item.amount || 1,
+            x: item.mesh.position.x,
+            y: item.mesh.position.y,
+            z: item.mesh.position.z
+        })),
+        entities: world.entities
+            .filter((entity) => entity.type !== 'player')
+            .map((entity) => ({
+                type: entity.type,
+                npcTypeId: entity.npcTypeId || (entity.npcData ? entity.npcData.id : null),
+                x: entity.x,
+                y: entity.y,
+                z: entity.z,
+                yaw: entity.yaw || 0,
+                pitch: entity.pitch || 0,
+                hp: entity.hp,
+                maxHP: entity.maxHP,
+                isHostile: !!entity.isHostile
+            }))
+    };
+    
+    const player = world.getPlayerEntity();
+    if (player) {
+        payload.player = {
+            x: player.x,
+            y: player.y,
+            z: player.z,
+            yaw: player.yaw || 0,
+            pitch: player.pitch || 0
+        };
     }
     
-    if (position) {
-        // Cria novo marcador (esfera vermelha pulsante)
-        const geometry = new THREE.SphereGeometry(0.3, 8, 8);
-        const material = new THREE.MeshBasicMaterial({ 
-            color: 0xff0000,
-            transparent: true,
-            opacity: 0.7
-        });
-        soundMarker = new THREE.Mesh(geometry, material);
-        soundMarker.position.set(position.x, position.y + 0.5, position.z);
-        scene.add(soundMarker);
+    const data = JSON.stringify(payload, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'map.json';
+    link.click();
+    URL.revokeObjectURL(url);
+}
+
+function applyMap(world, payload) {
+    if (!payload || !Array.isArray(payload.blocks)) {
+        console.warn('Mapa invalido.');
+        return;
+    }
+    
+    world.clearBlocks();
+    for (const item of world.items) {
+        world._internal.scene.remove(item.mesh);
+    }
+    world.items = [];
+    for (const proj of world.projectiles) {
+        world._internal.scene.remove(proj.mesh);
+    }
+    world.projectiles = [];
+    for (const message of world.messages) {
+        world._internal.scene.remove(message.mesh);
+    }
+    world.messages = [];
+    for (let i = world.entities.length - 1; i >= 0; i--) {
+        const entity = world.entities[i];
+        if (entity.type !== 'player') {
+            world.removeEntity(entity);
+        }
+    }
+    
+    for (const entry of payload.blocks) {
+        const blockType = Object.values(BLOCK_TYPES).find(bt => bt.id === entry.typeId);
+        if (!blockType) continue;
+        world.addBlock(entry.x, entry.y, entry.z, blockType, entry.isFloor);
+    }
+    
+    if (Array.isArray(payload.items)) {
+        for (const entry of payload.items) {
+            if (entry.kind === 'block') {
+                const blockType = Object.values(BLOCK_TYPES).find(bt => bt.id === entry.blockTypeId);
+                if (!blockType) continue;
+                spawnBlockDrop(world, blockType, entry.amount || 1, { x: entry.x, y: entry.y, z: entry.z });
+            } else if (entry.kind === 'item') {
+                spawnItemDrop(world, entry.itemId, entry.amount || 1, { x: entry.x, y: entry.y, z: entry.z });
+            }
+        }
+    }
+    
+    if (Array.isArray(payload.entities)) {
+        for (const entry of payload.entities) {
+            if (entry.type !== 'npc') continue;
+            const npcType = getNpcTypeById(entry.npcTypeId);
+            let entity = null;
+            if (npcType) {
+                entity = createNpcEntity(world, npcType, { x: entry.x, y: entry.y, z: entry.z });
+            }
+            if (!entity) continue;
+            entity.yaw = entry.yaw || 0;
+            entity.pitch = entry.pitch || 0;
+            if (typeof entry.hp === 'number') entity.hp = entry.hp;
+            if (typeof entry.maxHP === 'number') entity.maxHP = entry.maxHP;
+            entity.isHostile = !!entry.isHostile;
+        }
+    }
+    
+    let spawnBlock = world.blocks.find((block) => block.type && block.type.id === BLOCK_TYPES.PLAYER_SPAWN.id);
+    const player = world.getPlayerEntity();
+    if (spawnBlock && player) {
+        player.x = spawnBlock.x;
+        player.y = spawnBlock.y + 1;
+        player.z = spawnBlock.z;
+        player.yaw = 0;
+        player.pitch = 0;
+    } else if (payload.player && player) {
+        player.x = payload.player.x;
+        player.y = payload.player.y;
+        player.z = payload.player.z;
+        player.yaw = payload.player.yaw || 0;
+        player.pitch = payload.player.pitch || 0;
+    }
+}
+
+let mapFileInput = null;
+function requestMapImport(world) {
+    if (!mapFileInput) {
+        mapFileInput = document.createElement('input');
+        mapFileInput.type = 'file';
+        mapFileInput.accept = 'application/json';
+        mapFileInput.style.display = 'none';
+        document.body.appendChild(mapFileInput);
+    }
+    
+    mapFileInput.value = '';
+    mapFileInput.onchange = () => {
+        const file = mapFileInput.files && mapFileInput.files[0];
+        if (!file) return;
         
-        // Adiciona animação de pulso
-        soundMarker.userData.pulse = 0;
+        const reader = new FileReader();
+        reader.onload = () => {
+            try {
+                const payload = JSON.parse(reader.result);
+                applyMap(world, payload);
+            } catch (err) {
+                console.warn('Falha ao importar mapa:', err);
+            }
+        };
+        reader.readAsText(file);
+    };
+    
+    mapFileInput.click();
+}
+
+function dropSelectedBlock(world) {
+    const player = world.getPlayerEntity();
+    if (!player || !player.inventory) return;
+    
+    const count = player.inventory[player.selectedBlockType.id] || 0;
+    if (count <= 0 && world.mode !== 'editor') return;
+    
+    if (world.mode !== 'editor') {
+        player.inventory[player.selectedBlockType.id] = count - 1;
+    }
+    spawnBlockDrop(world, player.selectedBlockType, 1, {
+        x: player.x,
+        y: player.y + 0.5,
+        z: player.z
+    });
+}
+
+function dropFirstItem(world) {
+    const player = world.getPlayerEntity();
+    if (!player) return;
+    
+    const itemIds = Object.keys(player.itemInventory);
+    if (itemIds.length === 0 && world.mode !== 'editor') return;
+    
+    const itemId = itemIds[0] || ITEMS.COIN.id;
+    const count = player.itemInventory[itemId] || 0;
+    if (count <= 0 && world.mode !== 'editor') return;
+    
+    if (world.mode !== 'editor') {
+        player.itemInventory[itemId] = count - 1;
+    }
+    spawnItemDrop(world, itemId, 1, {
+        x: player.x,
+        y: player.y + 0.5,
+        z: player.z
+    });
+}
+
+function buildSelectionList(world, player) {
+    const list = [];
+    if (!player) return list;
+    
+    const isEditor = world.mode === 'editor';
+    Object.values(BLOCK_TYPES).forEach((blockType) => {
+        const count = player.inventory ? (player.inventory[blockType.id] || 0) : 0;
+        if (isEditor || count > 0) {
+            list.push({ kind: 'block', blockType });
+        }
+    });
+    
+    Object.values(ITEMS).forEach((itemDef) => {
+        const count = player.itemInventory ? (player.itemInventory[itemDef.id] || 0) : 0;
+        if (isEditor || count > 0) {
+            list.push({ kind: 'item', itemDef });
+        }
+    });
+
+    if (isEditor) {
+        Object.values(NPC_TYPES).forEach((npcType) => {
+            list.push({ kind: 'entity', action: 'spawn', npcType });
+        });
+        list.push({ kind: 'entity', action: 'despawn' });
+    }
+    
+    return list;
+}
+
+function getSelectionIndex(list, player) {
+    if (!player) return 0;
+    if (player.selectedItem) {
+        const idx = list.findIndex((entry) => (
+            entry.kind === player.selectedItem.kind &&
+            (entry.kind === 'block'
+                ? entry.blockType.id === player.selectedItem.id
+                : entry.kind === 'item'
+                    ? entry.itemDef.id === player.selectedItem.id
+                    : entry.action === player.selectedItem.action &&
+                        (entry.action !== 'spawn' || (
+                            (entry.npcType && entry.npcType.id === player.selectedItem.npcTypeId)
+                        )))
+        ));
+        if (idx >= 0) return idx;
+    }
+    if (player.selectedBlockType) {
+        const idx = list.findIndex((entry) => entry.kind === 'block' && entry.blockType.id === player.selectedBlockType.id);
+        if (idx >= 0) return idx;
+    }
+    return 0;
+}
+
+function applySelection(world, entry) {
+    const player = world.getPlayerEntity();
+    if (!player || !entry) return;
+    
+    if (entry.kind === 'block') {
+        player.selectedBlockType = entry.blockType;
+        player.selectedItem = { kind: 'block', id: entry.blockType.id };
+    } else if (entry.kind === 'item') {
+        player.itemInventory = player.itemInventory || {};
+        if (world.mode === 'editor') {
+            player.itemInventory[entry.itemDef.id] = Math.max(1, player.itemInventory[entry.itemDef.id] || 0);
+        }
+        player.selectedItem = { kind: 'item', id: entry.itemDef.id };
+    } else if (entry.kind === 'entity') {
+        player.selectedItem = {
+            kind: 'entity',
+            action: entry.action,
+            npcTypeId: entry.npcType ? entry.npcType.id : null
+        };
+    }
+    
+    updateCurrentItemLabel(world);
+}
+
+function updateCurrentItemLabel(world) {
+    const label = document.getElementById('current-item');
+    if (!label) return;
+    const player = world.getPlayerEntity();
+    if (!player) {
+        label.textContent = 'Item: -';
+        return;
+    }
+    if (!player.selectedItem && player.selectedBlockType) {
+        player.selectedItem = { kind: 'block', id: player.selectedBlockType.id };
+    }
+    if (!player.selectedItem) {
+        label.textContent = 'Item: -';
+        return;
+    }
+    if (player.selectedItem.kind === 'block') {
+        const name = player.selectedBlockType ? player.selectedBlockType.name : '-';
+        const count = player.selectedBlockType && player.inventory
+            ? (player.inventory[player.selectedBlockType.id] || 0)
+            : 0;
+        const amount = world.mode === 'editor' ? '∞' : count;
+        label.textContent = `Item: ${name} x${amount}`;
+    } else if (player.selectedItem.kind === 'item') {
+        const itemDef = Object.values(ITEMS).find((item) => item.id === player.selectedItem.id);
+        const count = itemDef && player.itemInventory ? (player.itemInventory[itemDef.id] || 0) : 0;
+        const amount = world.mode === 'editor' ? '∞' : count;
+        label.textContent = `Item: ${itemDef ? itemDef.name : '-'} x${amount}`;
+    } else if (player.selectedItem.kind === 'entity') {
+        if (player.selectedItem.action === 'despawn') {
+            label.textContent = 'Item: Despawn';
+        } else {
+            const npcType = getNpcTypeById(player.selectedItem.npcTypeId);
+            label.textContent = `Item: Spawn ${npcType ? npcType.name : '-'}`;
+        }
     }
 }
 
@@ -287,43 +724,55 @@ function onKeyDown(world, e) {
     if (e.code === 'KeyE' && world.ui.interactionTarget) {
         handleInteraction(world, world.ui.interactionTarget);
     }
+
+    if (e.code === 'KeyO') {
+        exportMap(world);
+    }
+    if (e.code === 'KeyI') {
+        requestMapImport(world);
+    }
+
+    if (e.code === 'KeyR' && player && player.selectedItem && player.selectedItem.kind === 'item') {
+        const itemDef = Object.values(ITEMS).find((item) => item.id === player.selectedItem.id);
+        if (itemDef) {
+            const count = player.itemInventory ? (player.itemInventory[itemDef.id] || 0) : 0;
+            if (world.mode === 'editor' || count > 0) {
+                useItem(world, player, itemDef, 1);
+                if (itemDef.isConsumable && world.mode !== 'editor') {
+                    player.itemInventory[itemDef.id] = Math.max(0, count - 1);
+                }
+                updateCurrentItemLabel(world);
+            }
+        }
+    }
+    
+    if (world.mode === 'editor') {
+        if (e.code === 'KeyN') {
+            if (!player) return;
+            player.noClip = !player.noClip;
+            spawnMessage(world, `Noclip ${player.noClip ? 'ON' : 'OFF'}`, {
+                relative: player,
+                offset: { x: 0, y: 2.2, z: 0 },
+                duration: 1500
+            });
+        }
+        if (e.code === 'KeyQ') {
+            dropSelectedBlock(world);
+        }
+        if (e.code === 'KeyF') {
+            dropFirstItem(world);
+        }
+    } else {
+        if (e.code === 'KeyQ') {
+            dropSelectedBlock(world);
+        }
+    }
     
     if (e.code === 'Tab') {
         e.preventDefault();
         const nextIndex = (world.playerEntityIndex + 1) % world.entities.length;
         world.switchPlayerControl(nextIndex);
-    }
-    
-    // MARCAR posição do som
-    if (e.code === 'KeyT') {
-        if (!fixedSoundPosition) {
-            fixedSoundPosition = { x: player.x, y: player.y, z: player.z };
-            updateSoundMarker(world, fixedSoundPosition);
-            console.log('🎯 Posição marcada:', fixedSoundPosition);
-            console.log('▶️ Pressione Y para tocar som nesta posição');
-            console.log('🚶 Ande para longe e pressione Y novamente!');
-        } else {
-            fixedSoundPosition = null;
-            updateSoundMarker(world, null);
-            console.log('❌ Marcador removido');
-        }
-    }
-    
-    // TOCAR som na posição marcada
-    if (e.code === 'KeyY') {
-        if (!fixedSoundPosition) {
-            console.log('⚠️ Pressione T primeiro para marcar!');
-        } else {
-            audioSystem.playOneShot('event:/teste', fixedSoundPosition);
-            
-            const dx = player.x - fixedSoundPosition.x;
-            const dz = player.z - fixedSoundPosition.z;
-            const distance = Math.sqrt(dx * dx + dz * dz);
-            
-            console.log(`🔊 Som na posição: (${fixedSoundPosition.x.toFixed(1)}, ${fixedSoundPosition.y.toFixed(1)}, ${fixedSoundPosition.z.toFixed(1)})`);
-            console.log(`📏 Distância: ${distance.toFixed(1)} blocos`);
-            console.log(`🎧 Volume esperado: ${distance < 5 ? 'ALTO 🔊' : distance < 10 ? 'MÉDIO 🔉' : 'BAIXO 🔈'}`);
-        }
+        updateCurrentItemLabel(world);
     }
     
     if (e.code === 'Digit1') selectBlockType(world, BLOCK_TYPES.STONE);
@@ -332,6 +781,20 @@ function onKeyDown(world, e) {
     if (e.code === 'Digit4') selectBlockType(world, BLOCK_TYPES.GOLD);
     if (e.code === 'Digit5') selectBlockType(world, BLOCK_TYPES.DOOR);
     if (e.code === 'Digit6') selectBlockType(world, BLOCK_TYPES.SAND);
+}
+
+function onWheel(world, event) {
+    const player = world.getPlayerEntity();
+    if (!player) return;
+    const list = buildSelectionList(world, player);
+    if (list.length === 0) return;
+    
+    event.preventDefault();
+    const currentIndex = getSelectionIndex(list, player);
+    const delta = event.deltaY > 0 ? 1 : -1;
+    let nextIndex = (currentIndex + delta) % list.length;
+    if (nextIndex < 0) nextIndex += list.length;
+    applySelection(world, list[nextIndex]);
 }
 
 function onMouseMove(world, event) {
@@ -348,12 +811,39 @@ function onMouseMove(world, event) {
 function onMouseDown(world, event) {
     if (document.pointerLockElement !== document.body) return;
     
-    const player = world.getPlayerEntity();
-    
-    if (event.button === 0) {
-        createProjectile(world);
-    } else if (event.button === 2) {
-        placeBlock(world);
+    if (world.mode === 'editor') {
+        const player = world.getPlayerEntity();
+        const selection = player ? player.selectedItem : null;
+        if (event.button === 0) {
+            if (selection && selection.kind === 'entity' && selection.action === 'despawn') {
+                if (!removeTargetItem(world)) {
+                    if (!removeTargetEntity(world)) {
+                        removeTargetBlock(world);
+                    }
+                }
+            } else {
+                removeTargetBlock(world);
+            }
+        } else if (event.button === 2) {
+            if (!selection) return;
+            const targetPos = world.ui.targetBlockPosition || { x: player.x, y: player.y, z: player.z };
+            if (selection.kind === 'entity' && selection.action === 'spawn') {
+                const npcType = getNpcTypeById(selection.npcTypeId);
+                if (npcType) {
+                    createNpcEntity(world, npcType, { x: targetPos.x, y: targetPos.y + 0.5, z: targetPos.z });
+                }
+            } else if (selection.kind === 'item') {
+                spawnItemDrop(world, selection.id, 1, { x: targetPos.x, y: targetPos.y + 0.5, z: targetPos.z });
+            } else {
+                placeBlock(world);
+            }
+        }
+    } else {
+        if (event.button === 0) {
+            createProjectile(world);
+        } else if (event.button === 2) {
+            placeBlock(world);
+        }
     }
 }
 
@@ -378,14 +868,10 @@ function animate(world) {
         // Atualiza entidades
         world.entities.forEach(entity => updateEntity(world, entity));
         updateProjectiles(world);
+        updateItems(world);
+        updateMessages(world);
         checkInteractionTarget(world);
-        
-        // Anima marcador de som
-        if (soundMarker) {
-            soundMarker.userData.pulse += 0.1;
-            const scale = 1 + Math.sin(soundMarker.userData.pulse) * 0.3;
-            soundMarker.scale.set(scale, scale, scale);
-        }
+        updateCurrentItemLabel(world);
         
         // Atualiza câmera e listener de áudio
         const player = world.getPlayerEntity();
@@ -393,7 +879,10 @@ function animate(world) {
             const camera = world._internal.camera;
             
             // Atualiza posição da câmera
-            camera.position.set(player.x, player.y + 1.6, player.z);
+            const eyeHeight = player.isCrouching
+                ? CONFIG.ENTITY_HEIGHT_CROUCHED * 0.8
+                : CONFIG.ENTITY_HEIGHT * 0.8;
+            camera.position.set(player.x, player.y + eyeHeight, player.z);
             camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
             camera.updateMatrixWorld(); // IMPORTANTE: atualiza a matriz antes de pegar vetores
             
@@ -405,7 +894,7 @@ function animate(world) {
             // ATUALIZA LISTENER DO FMOD (automático a cada frame)
             // ============================================================
             audioSystem.setListenerPosition(
-                { x: player.x, y: player.y + 1.6, z: player.z }, // Mesma altura da câmera
+                { x: player.x, y: player.y + eyeHeight, z: player.z },
                 { x: forward.x, y: forward.y, z: forward.z },
                 { x: up.x, y: up.y, z: up.z }
             );

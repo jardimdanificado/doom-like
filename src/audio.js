@@ -167,7 +167,7 @@ class FMODAudioSystem {
             position: { x: position.x, y: position.y, z: position.z },
             velocity: { x: 0, y: 0, z: 0 },
             forward: { x: forward.x, y: forward.y, z: forward.z },
-            up: { x: up.x, y: up.y, z: up.z }
+            up: { x: -up.x, y: -up.y, z: -up.z }
         };
 
         const r = this.system.setListenerAttributes(0, attributes, null);

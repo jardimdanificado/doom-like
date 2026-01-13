@@ -1,4 +1,5 @@
 import CONFIG from '../data/config.js';
+import BLOCK_TYPES from '../data/blocks.js';
 import { checkCollision, getGroundLevel } from './collision.js';
 
 // ============================================================
@@ -264,13 +265,18 @@ export function reconstructPath(cameFrom, current) {
 // ============================================================
 export function updateEntity(world, entity) {
     const isPlayerControlled = (world.getPlayerEntity() === entity);
+    const noClip = !!entity.noClip;
     
     // GRAVIDADE para TODAS as entidades (controláveis e hostis)
-    if(!entity.isEditor)
+    if (!noClip)
         entity.velocityY -= CONFIG.GRAVITY;
     
     if (isPlayerControlled) {
-        updatePlayerControlled(world, entity);
+        if (noClip) {
+            updateEditorControlled(world, entity);
+        } else {
+            updatePlayerControlled(world, entity);
+        }
     } else if (entity.isHostile) {
         // Hostis precisam de movimento mesmo não sendo controláveis
         updateHostileMovement(world, entity);
@@ -279,7 +285,7 @@ export function updateEntity(world, entity) {
     }
     
     // Física Y para TODAS as entidades
-    if(!entity.isEditor)
+    if (!noClip)
         applyPhysics(world, entity);
     
     // Gerencia visibilidade do mesh
@@ -289,6 +295,117 @@ export function updateEntity(world, entity) {
     if (entity.onUpdate) {
         entity.onUpdate(world, entity);
     }
+
+    if (!isPlayerControlled && entity.type === 'npc') {
+        updateNpcBlockInteraction(world, entity);
+    }
+}
+
+function updateNpcBlockInteraction(world, entity) {
+    if (entity.blockInteractCooldown > 0) {
+        entity.blockInteractCooldown--;
+        return;
+    }
+    const range = 1.2;
+    let closestBlock = null;
+    let closestDist = Infinity;
+    
+    for (const block of world.blocks) {
+        if (!block.hasUseFunction) continue;
+        const dx = block.x - entity.x;
+        const dy = block.y - entity.y;
+        const dz = block.z - entity.z;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist < range && dist < closestDist) {
+            closestDist = dist;
+            closestBlock = block;
+        }
+    }
+    
+    if (!closestBlock) return;
+    useBlock(world, closestBlock, entity);
+    entity.blockInteractCooldown = 120;
+}
+
+function useBlock(world, target, entity) {
+    if (!target.type || !target.hasUseFunction || !target.type.onUse) return;
+    const blockAdapter = {
+        userData: {
+            x: target.x,
+            y: target.y,
+            z: target.z,
+            type: target.type,
+            solid: target.solid,
+            isFloor: target.isFloor
+        },
+        material: target.mesh.material,
+        position: {
+            set: (x, y, z) => {
+                target.mesh.position.set(x, y, z);
+                target.x = x;
+                target.y = y;
+                target.z = z;
+            }
+        }
+    };
+    
+    target.type.onUse(world, blockAdapter, entity);
+    target.solid = blockAdapter.userData.solid;
+}
+
+export function updateEditorControlled(world, entity) {
+    const keys = world._internal.keys;
+    const speedBoost = keys['ShiftLeft'] || keys['ShiftRight'] ? 2.5 : 1;
+    const speed = CONFIG.EDITOR_FLY_SPEED * speedBoost;
+    entity.isCrouching = false;
+    entity.onGround = false;
+    
+    const forwardVec = new THREE.Vector3(0, 0, -1).applyEuler(
+        new THREE.Euler(entity.pitch, entity.yaw, 0, 'YXZ')
+    );
+    const rightVec = new THREE.Vector3().crossVectors(forwardVec, new THREE.Vector3(0, 1, 0)).normalize();
+    
+    let moveX = 0;
+    let moveY = 0;
+    let moveZ = 0;
+    
+    if (keys['KeyW']) {
+        moveX += forwardVec.x * speed;
+        moveY += forwardVec.y * speed;
+        moveZ += forwardVec.z * speed;
+    }
+    if (keys['KeyS']) {
+        moveX -= forwardVec.x * speed;
+        moveY -= forwardVec.y * speed;
+        moveZ -= forwardVec.z * speed;
+    }
+    if (keys['KeyA']) {
+        moveX -= rightVec.x * speed;
+        moveY -= rightVec.y * speed;
+        moveZ -= rightVec.z * speed;
+    }
+    if (keys['KeyD']) {
+        moveX += rightVec.x * speed;
+        moveY += rightVec.y * speed;
+        moveZ += rightVec.z * speed;
+    }
+    if (keys['Space']) {
+        moveY += speed;
+    }
+    if (keys['ControlLeft'] || keys['ControlRight']) {
+        moveY -= speed;
+    }
+
+    entity.x += moveX;
+    entity.y += moveY;
+    entity.z += moveZ;
+    
+    const camera = world._internal.camera;
+    const eyeHeight = CONFIG.ENTITY_HEIGHT * 0.8;
+    camera.position.set(entity.x, entity.y + eyeHeight, entity.z);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = entity.yaw;
+    camera.rotation.x = entity.pitch;
 }
 
 export function canStandUp(world, entity, x, y, z) {
@@ -594,9 +711,9 @@ export function shootProjectileFromEntity(world, shooter, target) {
     
     const damage = shooter.selectedBlockType.breakDamage;
     
-    const geometry = new THREE.SphereGeometry(0.1, 8, 8);
-    const material = new THREE.MeshBasicMaterial({ color: 0xff4400 }); // Cor diferente para NPCs
-    const mesh = new THREE.Mesh(geometry, material);
+    const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+    const materials = createBlockMaterials(world, shooter.selectedBlockType);
+    const mesh = new THREE.Mesh(geometry, materials);
     
     // Posição inicial do projétil
     const shooterHeight = shooter.isCrouching 
@@ -626,6 +743,35 @@ export function shootProjectileFromEntity(world, shooter, target) {
     console.log(`${shooter.name} atirou!`);
 }
 
+function createBlockMaterials(world, blockType) {
+    const textures = world._internal.blockTextures;
+    
+    if (blockType.textures.all) {
+        const mat = new THREE.MeshLambertMaterial({ 
+            map: textures[blockType.textures.all],
+            transparent: blockType.id === BLOCK_TYPES.DOOR.id,
+            opacity: blockType.id === BLOCK_TYPES.DOOR.id ? 0.8 : 1
+        });
+        return [mat, mat, mat, mat, mat, mat];
+    }
+    
+    if (blockType.textures.top) {
+        const topMat = new THREE.MeshLambertMaterial({ 
+            map: textures[blockType.textures.top]
+        });
+        const sideMat = new THREE.MeshLambertMaterial({ 
+            map: textures[blockType.textures.side]
+        });
+        const bottomMat = new THREE.MeshLambertMaterial({ 
+            map: textures[blockType.textures.bottom]
+        });
+        return [sideMat, sideMat, topMat, bottomMat, sideMat, sideMat];
+    }
+    
+    const fallback = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    return [fallback, fallback, fallback, fallback, fallback, fallback];
+}
+
 export function applyPhysics(world, entity) {
     let newY = entity.y + entity.velocityY;
     const yCollision = checkCollision(world, entity.x, newY, entity.z, entity);
@@ -651,9 +797,17 @@ export function updateEntityMesh(world, entity, isPlayerControlled) {
         }
     } else {
         if (!entity.mesh && entity.npcData) {
-            const geometry = new THREE.PlaneGeometry(entity.npcData.width, entity.npcData.height);
+            const texture = world._internal.blockTextures[entity.npcData.texture];
+            let width = entity.npcData.width;
+            let height = entity.npcData.height;
+            if (texture && texture.image && texture.image.width && texture.image.height) {
+                const aspect = texture.image.width / texture.image.height;
+                height = entity.npcData.height;
+                width = height * aspect;
+            }
+            const geometry = new THREE.PlaneGeometry(width, height);
             const material = new THREE.MeshBasicMaterial({
-                map: world._internal.blockTextures[entity.npcData.texture],
+                map: texture,
                 transparent: true,
                 alphaTest: 0.5,
                 side: THREE.DoubleSide

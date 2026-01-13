@@ -1,83 +1,340 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-br">
 <head>
-<meta charset="UTF-8">
-<title>maquina estatal - no game specified</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<style>
-    body {
-        margin: 0;
-        background: #87CEEB;
-        overflow: hidden;
-        font-family: 'Courier New', monospace;
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>estatal - no game specified</title>
+  <style>
+    :root{
+      --concrete1:#595d5f;
+      --concrete2:#484b4d;
+      --concrete3:#373a3b;
+      --concrete4:#2a2d2e;
+      --paper:#d8d1bf;
+      --paper-old:#c9c2b0;
+      --ink:#0a0b0c;
+      --red:#b91c1c;
+      --red-dark:#7f1d1d;
+      --yellow:#d97706;
+      --rust:#92400e;
     }
-    canvas {
-        display: block;
+
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%;overflow-x:hidden}
+
+    body{
+      background: 
+        radial-gradient(ellipse at 30% 20%, #1f2326 0%, #0f1113 60%, #000000 100%);
+      display:flex;
+      justify-content:center;
+      align-items:center;
+      padding:32px 20px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      font-weight:600;
     }
-    #crosshair {
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        width: 20px;
-        height: 20px;
-        pointer-events: none;
+
+    /* PAREDE DE CONCRETO BRUTALISTA */
+    .wall{
+      width:min(1200px, 100%);
+      min-height:600px;
+      padding:40px 32px;
+      position:relative;
+      border:8px solid #1a1d1f;
+      box-shadow: 
+        inset 0 0 80px rgba(0,0,0,.3),
+        0 30px 80px rgba(0,0,0,.9),
+        0 10px 30px rgba(0,0,0,.7);
+      
+      /* Textura simples de concreto */
+      background:
+        /* Noise/grão fino */
+        repeating-linear-gradient(0deg, 
+          transparent 0px, 
+          rgba(0,0,0,.015) 1px, 
+          transparent 2px),
+        repeating-linear-gradient(90deg, 
+          transparent 0px, 
+          rgba(255,255,255,.01) 1px, 
+          transparent 2px),
+        /* Manchas sutis */
+        radial-gradient(ellipse 800px 600px at 20% 30%, rgba(255,255,255,.04), transparent),
+        radial-gradient(ellipse 700px 500px at 80% 70%, rgba(0,0,0,.06), transparent),
+        /* Base uniforme */
+        #505458;
     }
-    #crosshair::before,
-    #crosshair::after {
-        content: '';
-        position: absolute;
-        background: white;
+
+    /* Textura granular do concreto */
+    .wall::before{
+      content:"";
+      position:absolute;
+      inset:0;
+      background-image: 
+        repeating-linear-gradient(0deg, 
+          rgba(0,0,0,.02) 0px, 
+          transparent 1px, 
+          transparent 4px),
+        repeating-linear-gradient(90deg, 
+          rgba(0,0,0,.02) 0px, 
+          transparent 1px, 
+          transparent 4px);
+      opacity:.8;
+      pointer-events:none;
     }
-    #crosshair::before {
-        width: 2px;
-        height: 20px;
-        left: 9px;
+
+    /* Vazio - removido */
+    .wall::after{
+      content:"";
+      position:absolute;
+      inset:0;
+      pointer-events:none;
     }
-    #crosshair::after {
-        width: 20px;
-        height: 2px;
-        top: 9px;
+
+    /* Placa de identificação metálica */
+    .title{
+      position:relative;
+      display:inline-block;
+      margin:0 0 32px 0;
+      padding:12px 20px 12px 18px;
+      background: 
+        linear-gradient(180deg, #3a3d3f 0%, #2d3032 50%, #23262 100%);
+      border:4px solid #1a1c1e;
+      box-shadow: 
+        inset 0 1px 0 rgba(255,255,255,.1),
+        inset 0 -2px 8px rgba(0,0,0,.5),
+        0 8px 16px rgba(0,0,0,.6),
+        0 2px 4px rgba(0,0,0,.4);
+      
+      font-size:20px;
+      font-weight:900;
+      letter-spacing:.25em;
+      text-transform:uppercase;
+      color:#a8abac;
+      text-shadow: 
+        0 -1px 0 rgba(0,0,0,.8),
+        0 1px 0 rgba(255,255,255,.1);
     }
-    #info {
-        position: fixed;
-        top: 10px;
-        left: 10px;
-        color: white;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
-        font-size: 14px;
-        line-height: 1.5;
+
+    .title::before{
+      content:"★";
+      margin-right:12px;
+      color:var(--red);
+      filter:drop-shadow(0 0 4px rgba(185,28,28,.4));
     }
-    #interaction {
-        position: fixed;
-        bottom: 100px;
-        left: 50%;
-        transform: translateX(-50%);
-        color: white;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
-        font-size: 16px;
-        font-weight: bold;
-        display: none;
+
+    .posters{
+      display:grid;
+      gap:28px;
+      grid-template-columns:1fr;
     }
-    #block-outline {
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        width: 60px;
-        height: 60px;
-        border: 3px solid rgba(255, 255, 255, 0.5);
-        pointer-events: none;
-        display: none;
+
+    @media (min-width: 860px){
+      .posters{grid-template-columns:1fr 1fr}
     }
-</style>
+
+    /* POSTER DE PROPAGANDA */
+    a.poster{
+      text-decoration:none;
+      color:var(--ink);
+      position:relative;
+      display:block;
+      padding:24px 20px 20px 20px;
+      min-height:280px;
+      
+      /* Papel envelhecido */
+      background:
+        /* Manchas amareladas */
+        radial-gradient(circle 500px at 25% 15%, rgba(217,119,6,.12), transparent 50%),
+        radial-gradient(circle 400px at 75% 80%, rgba(146,64,14,.08), transparent 45%),
+        /* Grão do papel */
+        repeating-linear-gradient(0deg, 
+          rgba(0,0,0,.025) 0px, 
+          transparent 1px, 
+          transparent 3px),
+        repeating-linear-gradient(90deg, 
+          rgba(0,0,0,.02) 0px, 
+          transparent 1px, 
+          transparent 3px),
+        linear-gradient(180deg, var(--paper) 0%, var(--paper-old) 100%);
+      
+      border:6px solid rgba(0,0,0,.7);
+      box-shadow:
+        inset 0 0 0 1px rgba(255,255,255,.2),
+        inset 0 0 60px rgba(0,0,0,.08),
+        0 20px 40px rgba(0,0,0,.4),
+        0 8px 16px rgba(0,0,0,.3);
+      
+      transition: all .15s ease;
+    }
+
+    /* Canto rasgado/dobrado */
+    a.poster::after{
+      content:"";
+      position:absolute;
+      right:0;
+      top:0;
+      width:0;
+      height:0;
+      border-style:solid;
+      border-width:0 40px 40px 0;
+      border-color:transparent rgba(0,0,0,.3) transparent transparent;
+      filter:drop-shadow(-2px 2px 3px rgba(0,0,0,.2));
+    }
+
+    /* Faixa de propaganda vermelha */
+    .banner{
+      display:inline-block;
+      padding:10px 16px;
+      margin-bottom:2px;
+      background:linear-gradient(180deg, var(--red) 0%, var(--red-dark) 100%);
+      border:4px solid rgba(0,0,0,.8);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.15),
+        inset 0 -2px 6px rgba(0,0,0,.4),
+        0 6px 12px rgba(0,0,0,.3);
+      
+      color:#fef3f2;
+      font-size:11px;
+      font-weight:900;
+      letter-spacing:.2em;
+      text-transform:uppercase;
+      text-shadow:0 2px 4px rgba(0,0,0,.5);
+      transform:rotate(-1deg);
+    }
+
+    /* Título grande */
+    .big{
+      margin:20px 0 0 0;
+      font-size:48px;
+      font-weight:900;
+      text-transform:uppercase;
+      letter-spacing:.02em;
+      line-height:.95;
+      color:var(--ink);
+      text-shadow:
+        3px 3px 0 rgba(0,0,0,.15),
+        -1px -1px 0 rgba(255,255,255,.3);
+      transform:scaleY(1.1);
+    }
+
+    /* Subtítulo */
+    .sub{
+      margin:16px 0 0 0;
+      font-size:13px;
+      font-weight:700;
+      letter-spacing:.08em;
+      text-transform:uppercase;
+      color:rgba(10,11,12,.75);
+      line-height:1.4;
+      max-width:46ch;
+    }
+
+    /* Call to action */
+    .cta{
+      margin-top:20px;
+      display:inline-block;
+      padding:10px 16px;
+      background:
+        repeating-linear-gradient(45deg,
+          rgba(0,0,0,.03) 0px,
+          rgba(0,0,0,.03) 2px,
+          transparent 2px,
+          transparent 4px);
+      border:3px dashed rgba(0,0,0,.6);
+      font-size:11px;
+      font-weight:900;
+      letter-spacing:.15em;
+      text-transform:uppercase;
+      color:rgba(10,11,12,.8);
+      box-shadow:0 4px 8px rgba(0,0,0,.15);
+    }
+
+    /* Estados interativos */
+    a.poster:hover{
+      transform:translateY(-4px) rotate(0deg);
+      box-shadow:
+        inset 0 0 0 1px rgba(255,255,255,.3),
+        inset 0 0 60px rgba(0,0,0,.08),
+        0 24px 48px rgba(0,0,0,.5),
+        0 12px 20px rgba(0,0,0,.35);
+    }
+
+    a.poster:active{
+      transform:translateY(2px) rotate(0deg);
+    }
+
+    /* Fitas adesivas que seguram o poster */
+    .tape{
+      position:absolute;
+      top:-12px;
+      left:24px;
+      width:100px;
+      height:30px;
+      background:
+        linear-gradient(180deg, 
+          rgba(240,235,220,.7) 0%, 
+          rgba(230,225,210,.6) 100%);
+      border:2px solid rgba(0,0,0,.15);
+      border-left-color:rgba(0,0,0,.25);
+      border-right-color:rgba(0,0,0,.25);
+      box-shadow:
+        inset 0 0 20px rgba(255,255,255,.3),
+        0 8px 16px rgba(0,0,0,.25);
+      transform:rotate(-8deg);
+      pointer-events:none;
+      z-index:10;
+    }
+
+    .tape.r{
+      left:auto;
+      right:24px;
+      width:120px;
+      transform:rotate(6deg);
+    }
+
+    /* Variações sutis de rotação nos posters */
+    a.poster:nth-child(1){transform:rotate(-.5deg)}
+    a.poster:nth-child(2){transform:rotate(.4deg)}
+
+    /* Símbolos decorativos */
+    .symbol{
+      position:absolute;
+      bottom:16px;
+      right:20px;
+      font-size:32px;
+      opacity:.15;
+      font-weight:900;
+      user-select:none;
+      pointer-events:none;
+    }
+  </style>
 </head>
 <body>
-<div id="crosshair"></div>
-<div id="interaction"></div>
-<div id="block-outline"></div>
-<div id="inventory"></div>
+  <section class="wall" role="main" aria-label="Parede de concreto brutalista com avisos">
+    <h1 class="title">ИНФОРМАЦИЯ / PAREDE</h1>
 
-<script type = "module" src="./main.js"></script>
+    <div class="posters">
+      <a class="poster" href="shooter.html" aria-label="Acessar módulo Shooter">
+        <div class="tape"></div>
+        <div class="tape r"></div>
+        
+        <span class="banner">⚠ ORDEM • DISCIPLINA • AÇÃO ⚠</span>
+        <h2 class="big">SHOOTER</h2>
+        <p class="sub">Entrada autorizada. Protocolo de combate ativado. Teste de reflexos e resistência sob pressão.</p>
+        <span class="cta">→ ACESSAR MÓDULO</span>
+        <div class="symbol">⚒</div>
+      </a>
+
+      <a class="poster" href="editor.html" aria-label="Acessar módulo Editor">
+        <div class="tape"></div>
+        <div class="tape r"></div>
+        
+        <span class="banner">⚙ TRABALHO • FORMA • ESTRUTURA ⚙</span>
+        <h2 class="big">EDITOR</h2>
+        <p class="sub">Oficina de construção liberada. Modificação de ambiente. Preparação e ajuste de terreno.</p>
+        <span class="cta">→ ACESSAR MÓDULO</span>
+        <div class="symbol">★</div>
+      </a>
+    </div>
+  </section>
 </body>
 </html>
