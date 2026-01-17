@@ -607,9 +607,33 @@ export function placeBlock(world) {
 export function updateProjectiles(world) {
     for (let i = world.projectiles.length - 1; i >= 0; i--) {
         const proj = world.projectiles[i];
-        
+        const bounds = world._internal.mapBounds;
+        if (bounds) {
+            const margin = CONFIG.WORLD_MAX_RADIUS;
+            if (proj.mesh.position.x < bounds.minX - margin ||
+                proj.mesh.position.x > bounds.maxX + margin ||
+                proj.mesh.position.z < bounds.minZ - margin ||
+                proj.mesh.position.z > bounds.maxZ + margin ||
+                proj.mesh.position.y < CONFIG.WORLD_MIN_Y) {
+                world._internal.scene.remove(proj.mesh);
+                world.projectiles.splice(i, 1);
+                continue;
+            }
+        } else {
+            const center = world._internal.mapCenter || { x: 0, z: 0 };
+            const dx = proj.mesh.position.x - center.x;
+            const dz = proj.mesh.position.z - center.z;
+            const radius = Math.sqrt(dx * dx + dz * dz);
+            if (radius > CONFIG.WORLD_MAX_RADIUS || proj.mesh.position.y < CONFIG.WORLD_MIN_Y) {
+                world._internal.scene.remove(proj.mesh);
+                world.projectiles.splice(i, 1);
+                continue;
+            }
+        }
+
+        proj.velocity.y -= CONFIG.GRAVITY * 0.6;
+        proj.velocity.multiplyScalar(0.985);
         proj.mesh.position.add(proj.velocity);
-        proj.lifeTime--;
         
         let hitSomething = false;
         
@@ -703,11 +727,6 @@ export function updateProjectiles(world) {
         
         if (hitSomething) continue;
         
-        // Remove projétil se acabou o tempo
-        if (proj.lifeTime <= 0) {
-            world._internal.scene.remove(proj.mesh);
-            world.projectiles.splice(i, 1);
-        }
     }
     updateFx(world);
 }
