@@ -1554,15 +1554,6 @@ function onKeyDown(world, e) {
     
     
     if (world.mode === 'editor') {
-        if (e.code === 'KeyN') {
-            if (!player) return;
-            player.noClip = !player.noClip;
-            spawnMessage(world, `Noclip ${player.noClip ? 'ON' : 'OFF'}`, {
-                relative: player,
-                offset: { x: 0, y: 2.2, z: 0 },
-                duration: 1500
-            });
-        }
         if (e.code === 'KeyQ') {
             dropSelectedBlock(world);
         }
@@ -1589,6 +1580,17 @@ function onWheel(world, event) {
     event.preventDefault();
     const currentIndex = getSelectionIndex(list, player);
     const delta = event.deltaY > 0 ? 1 : -1;
+    let nextIndex = (currentIndex + delta) % list.length;
+    if (nextIndex < 0) nextIndex += list.length;
+    applySelection(world, list[nextIndex]);
+}
+
+function stepSelection(world, delta) {
+    const player = world.getPlayerEntity();
+    if (!player) return;
+    const list = buildSelectionList(world, player);
+    if (list.length === 0) return;
+    const currentIndex = getSelectionIndex(list, player);
     let nextIndex = (currentIndex + delta) % list.length;
     if (nextIndex < 0) nextIndex += list.length;
     applySelection(world, list[nextIndex]);
@@ -1703,6 +1705,19 @@ function setupMobileControls(world) {
     rightPad.style.pointerEvents = 'auto';
     rightPad.style.zIndex = '2';
     container.appendChild(rightPad);
+
+    const topBar = document.createElement('div');
+    topBar.style.position = 'fixed';
+    topBar.style.top = '10px';
+    topBar.style.left = '50%';
+    topBar.style.transform = 'translateX(-50%)';
+    topBar.style.display = 'grid';
+    topBar.style.gridTemplateColumns = 'repeat(4, 70px)';
+    topBar.style.gridAutoRows = '42px';
+    topBar.style.gap = '6px';
+    topBar.style.pointerEvents = 'auto';
+    topBar.style.zIndex = '2';
+    container.appendChild(topBar);
     
     const lookPad = document.createElement('div');
     lookPad.style.position = 'fixed';
@@ -1712,11 +1727,11 @@ function setupMobileControls(world) {
     lookPad.style.zIndex = '1';
     container.appendChild(lookPad);
     
-    const makeButton = (label, onDown, onUp) => {
+    const makeButton = (label, onDown, onUp, size = 60) => {
         const btn = document.createElement('button');
         btn.textContent = label;
-        btn.style.width = '60px';
-        btn.style.height = '60px';
+        btn.style.width = `${size}px`;
+        btn.style.height = `${size}px`;
         btn.style.borderRadius = '10px';
         btn.style.border = '1px solid rgba(255,255,255,0.4)';
         btn.style.background = 'rgba(0,0,0,0.4)';
@@ -1734,6 +1749,7 @@ function setupMobileControls(world) {
         });
         return btn;
     };
+    const makeTopButton = (label, onDown, onUp) => makeButton(label, onDown, onUp, 42);
     
     const pressKey = (code) => {
         world._internal.keys[code] = true;
@@ -1777,22 +1793,33 @@ function setupMobileControls(world) {
     leftPad.appendChild(makeButton('W', () => pressKey('KeyW'), () => releaseKey('KeyW')));
     leftPad.appendChild(document.createElement('div'));
     leftPad.appendChild(makeButton('A', () => pressKey('KeyA'), () => releaseKey('KeyA')));
-    leftPad.appendChild(makeButton('S', () => pressKey('KeyS'), () => releaseKey('KeyS')));
+    leftPad.appendChild(document.createElement('div'));
     leftPad.appendChild(makeButton('D', () => pressKey('KeyD'), () => releaseKey('KeyD')));
     leftPad.appendChild(document.createElement('div'));
-    leftPad.appendChild(makeButton('Jump', jumpAction, jumpRelease));
-    leftPad.appendChild(makeButton('Down', downAction, downRelease));
+    leftPad.appendChild(makeButton('S', () => pressKey('KeyS'), () => releaseKey('KeyS')));
+    leftPad.appendChild(document.createElement('div'));
     
     rightPad.appendChild(makeButton('Shoot', () => primaryAction(world)));
     rightPad.appendChild(makeButton('Action', () => secondaryAction(world)));
     rightPad.appendChild(makeButton('Drop', () => dropSelectedBlock(world)));
-    rightPad.appendChild(makeButton('Noclip', () => {
-        if (world.mode !== 'editor') return;
-        const player = world.getPlayerEntity();
-        if (!player) return;
-        player.noClip = !player.noClip;
+    rightPad.appendChild(makeButton('Jump', jumpAction, jumpRelease));
+    rightPad.appendChild(makeButton('Down', downAction, downRelease));
+
+    topBar.appendChild(makeTopButton('Prev', () => stepSelection(world, -1)));
+    topBar.appendChild(makeTopButton('Next', () => stepSelection(world, 1)));
+    topBar.appendChild(makeTopButton('Mode', () => {
+        const nextMode = world.mode === 'editor' ? 'game' : 'editor';
+        setWorldMode(world, nextMode);
     }));
-    
+    topBar.appendChild(makeTopButton('Menu', () => {
+        if (world.mode !== 'editor') return;
+        openEditorContextMenu(world, {
+            clientX: window.innerWidth / 2,
+            clientY: window.innerHeight / 2
+        });
+    }));
+    topBar.appendChild(makeTopButton('Export', () => exportMap(world)));
+    topBar.appendChild(makeTopButton('Import', () => requestMapImport(world)));
     let lookActive = false;
     let lastX = 0;
     let lastY = 0;
