@@ -184,6 +184,12 @@ function spawnBloodDecal(world, point, normal, isFloor, keys = null, sizeOverrid
     });
 }
 
+function getBlockTexture(world, blockType) {
+    if (!blockType || !blockType.textures) return null;
+    const key = blockType.textures.all || blockType.textures.top || null;
+    return key ? world._internal.blockTextures[key] || null : null;
+}
+
 function findFloorHitUnderEntity(world, entity) {
     const raycaster = world._internal.raycaster;
     const origin = new THREE.Vector3(entity.x, entity.y + 0.2, entity.z);
@@ -198,14 +204,19 @@ function findFloorHitUnderEntity(world, entity) {
     return { hit, block };
 }
 
-function spawnBlockDebris(world, block, count = 4) {
+function spawnBlockDebris(world, block, impactBlockType = null, count = 4) {
     if (!block.mesh) return;
     const sourceMat = Array.isArray(block.mesh.material)
         ? block.mesh.material[0]
         : block.mesh.material;
-    const texture = sourceMat && sourceMat.map ? sourceMat.map : null;
+    const baseTexture = sourceMat && sourceMat.map ? sourceMat.map : null;
+    const impactTexture = getBlockTexture(world, impactBlockType);
+    const textures = [baseTexture, impactTexture].filter(Boolean);
     for (let i = 0; i < count; i++) {
         const geometry = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+        const texture = textures.length
+            ? textures[Math.floor(Math.random() * textures.length)]
+            : null;
         const material = new THREE.MeshLambertMaterial({
             map: texture || null,
             color: texture ? 0xffffff : 0xdddddd,
@@ -243,6 +254,9 @@ function addBloodStain(world, entity) {
     if (!entity.mesh) return;
     const texture = pickTexture(world, BLOOD_SPLASH_KEYS);
     if (!texture) return;
+    const npcTexture = entity.mesh.material && entity.mesh.material.map
+        ? entity.mesh.material.map
+        : null;
     const width = (entity.npcData && entity.npcData.width)
         || (entity.mesh.geometry && entity.mesh.geometry.parameters && entity.mesh.geometry.parameters.width)
         || 0.8;
@@ -253,6 +267,7 @@ function addBloodStain(world, entity) {
     const geometry = new THREE.PlaneGeometry(size, size);
     const material = new THREE.MeshBasicMaterial({
         map: texture,
+        alphaMap: npcTexture,
         transparent: true,
         opacity: 0.85,
         alphaTest: 0.1,
@@ -268,12 +283,20 @@ function addBloodStain(world, entity) {
     entity.mesh.add(stain);
     entity._bloodStains = entity._bloodStains || [];
     entity._bloodStains.push(stain);
-    if (entity._bloodStains.length > 6) {
+    if (entity._bloodStains.length > 4) {
         const old = entity._bloodStains.shift();
         if (old && old.parent) old.parent.remove(old);
         if (old && old.material) old.material.dispose();
         if (old && old.geometry) old.geometry.dispose();
     }
+    setTimeout(() => {
+        if (!entity._bloodStains) return;
+        const idx = entity._bloodStains.indexOf(stain);
+        if (idx >= 0) entity._bloodStains.splice(idx, 1);
+        if (stain.parent) stain.parent.remove(stain);
+        if (stain.material) stain.material.dispose();
+        if (stain.geometry) stain.geometry.dispose();
+    }, 450);
 }
 
 function flashEntityRed(entity) {
@@ -346,9 +369,9 @@ function applyEntityHitEffects(world, entity, direction) {
     }
 }
 
-function applyBlockHitEffects(world, block) {
+function applyBlockHitEffects(world, block, impactBlockType = null) {
     flashBlockWhite(block);
-    spawnBlockDebris(world, block, 4);
+    spawnBlockDebris(world, block, impactBlockType, 4);
 }
 
 function updateFx(world) {
@@ -490,7 +513,8 @@ export function createProjectile(world) {
         velocity: direction.multiplyScalar(speed),
         damage: damage,
         lifeTime: lifeTime,
-        shooter: player
+        shooter: player,
+        blockType: player.selectedBlockType
     };
     
     world._internal.scene.add(mesh);
@@ -652,7 +676,7 @@ export function updateProjectiles(world) {
             
             if (distance < 0.5) {
                 block.hp -= proj.damage;
-                applyBlockHitEffects(world, block);
+                applyBlockHitEffects(world, block, proj.blockType || null);
                 
                 console.log(`${block.type.name} HP: ${block.hp}/${block.maxHP}`);
                 

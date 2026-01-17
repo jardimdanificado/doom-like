@@ -10,14 +10,14 @@ const VISION_ICONS = {
     hostile: { seen: 'sensed_hostile', unseen: 'sensed_hostile_unseen' }
 };
 const DIRECTION_ICONS = [
-    'travel_to_1',
-    'travel_to_2',
-    'travel_to_3',
-    'travel_to_4',
-    'travel_to_5',
-    'travel_to_6',
-    'travel_to_7',
-    'travel_to_8'
+    'arrow_0',
+    'arrow_1',
+    'arrow_2',
+    'arrow_3',
+    'arrow_4',
+    'arrow_5',
+    'arrow_6',
+    'arrow_7'
 ];
 const HP_ICONS = [
     { threshold: 0.15, key: 'mdam_almost_dead' },
@@ -330,7 +330,7 @@ export function updateEntity(world, entity) {
     const isPlayerControlled = (world.getPlayerEntity() === entity);
     const noClip = !!entity.noClip;
     const bounds = world._internal.mapBounds;
-    if (bounds) {
+    if (world.mode === 'game' && bounds) {
         const margin = CONFIG.WORLD_MAX_RADIUS;
         if (entity.x < bounds.minX - margin ||
             entity.x > bounds.maxX + margin ||
@@ -340,7 +340,7 @@ export function updateEntity(world, entity) {
             world.removeEntity(entity);
             return;
         }
-    } else {
+    } else if (world.mode === 'game') {
         const center = world._internal.mapCenter || { x: 0, z: 0 };
         const dx = entity.x - center.x;
         const dz = entity.z - center.z;
@@ -995,7 +995,8 @@ export function shootProjectileFromEntity(world, shooter, target) {
         velocity: direction.multiplyScalar(speed),
         damage: damage,
         lifeTime: lifeTime,
-        shooter: shooter // Guarda referência de quem atirou
+        shooter: shooter, // Guarda referência de quem atirou
+        blockType: shooter.selectedBlockType
     };
     
     world._internal.scene.add(mesh);
@@ -1007,25 +1008,33 @@ export function shootProjectileFromEntity(world, shooter, target) {
 
 function createBlockMaterials(world, blockType) {
     const textures = world._internal.blockTextures;
+    const opacity = typeof blockType.opacity === 'number' ? blockType.opacity : 1;
+    const transparent = opacity < 1;
     
     if (blockType.textures.all) {
         const mat = new THREE.MeshLambertMaterial({ 
             map: textures[blockType.textures.all],
-            transparent: blockType.id === BLOCK_TYPES.DOOR.id,
-            opacity: blockType.id === BLOCK_TYPES.DOOR.id ? 0.8 : 1
+            transparent: transparent,
+            opacity: opacity
         });
         return [mat, mat, mat, mat, mat, mat];
     }
     
     if (blockType.textures.top) {
         const topMat = new THREE.MeshLambertMaterial({ 
-            map: textures[blockType.textures.top]
+            map: textures[blockType.textures.top],
+            transparent: transparent,
+            opacity: opacity
         });
         const sideMat = new THREE.MeshLambertMaterial({ 
-            map: textures[blockType.textures.side]
+            map: textures[blockType.textures.side],
+            transparent: transparent,
+            opacity: opacity
         });
         const bottomMat = new THREE.MeshLambertMaterial({ 
-            map: textures[blockType.textures.bottom]
+            map: textures[blockType.textures.bottom],
+            transparent: transparent,
+            opacity: opacity
         });
         return [sideMat, sideMat, topMat, bottomMat, sideMat, sideMat];
     }
@@ -1181,6 +1190,11 @@ function ensureIndicatorMeshes(world, entity) {
         transparent: true
     });
     const bgMesh = new THREE.Mesh(bgGeometry, bgMaterial);
+    const dirBgMaterial = new THREE.MeshBasicMaterial({
+        map: world._internal.blockTextures['halo'],
+        transparent: true
+    });
+    const dirBgMesh = new THREE.Mesh(bgGeometry, dirBgMaterial);
     const spriteMaterial = new THREE.MeshBasicMaterial({
         map: world._internal.blockTextures[VISION_ICONS.friendly.unseen],
         transparent: true
@@ -1198,19 +1212,25 @@ function ensureIndicatorMeshes(world, entity) {
     const dirMesh = new THREE.Mesh(spriteGeometry, dirMaterial);
 
     const gap = 0.05;
-    const totalWidth = spriteSize + gap + nameTag.width;
-    bgMesh.position.x = -totalWidth / 2 + spriteSize / 2;
+    const totalWidth = spriteSize + gap + nameTag.width + gap + spriteSize;
+    const leftX = -totalWidth / 2 + spriteSize / 2;
+    const rightX = totalWidth / 2 - spriteSize / 2;
+    bgMesh.position.x = leftX;
     bgMesh.position.z = -0.001;
-    spriteMesh.position.x = -totalWidth / 2 + spriteSize / 2;
-    dirMesh.position.x = spriteMesh.position.x;
-    hpMesh.position.x = spriteMesh.position.x;
+    dirBgMesh.position.x = rightX;
+    dirBgMesh.position.z = -0.001;
+    spriteMesh.position.x = leftX;
+    hpMesh.position.x = leftX;
+    dirMesh.position.x = rightX;
     nameTag.mesh.position.x = -totalWidth / 2 + spriteSize + gap + nameTag.width / 2;
 
     bgMesh.renderOrder = 0;
+    dirBgMesh.renderOrder = 0;
     spriteMesh.renderOrder = 1;
     dirMesh.renderOrder = 2;
     hpMesh.renderOrder = 3;
     group.add(bgMesh);
+    group.add(dirBgMesh);
     group.add(spriteMesh);
     group.add(dirMesh);
     group.add(hpMesh);
@@ -1218,6 +1238,7 @@ function ensureIndicatorMeshes(world, entity) {
 
     entity.indicatorGroup = group;
     entity.statusBackgroundMesh = bgMesh;
+    entity.directionBackgroundMesh = dirBgMesh;
     entity.statusSpriteMesh = spriteMesh;
     entity.hpSpriteMesh = hpMesh;
     entity.directionSpriteMesh = dirMesh;
@@ -1320,6 +1341,12 @@ export function refreshEntityIndicators(world, entity) {
     if (entity.statusBackgroundMesh && entity.statusBackgroundMesh.geometry) {
         entity.statusBackgroundMesh.geometry.dispose();
     }
+    if (entity.directionBackgroundMesh && entity.directionBackgroundMesh.material) {
+        entity.directionBackgroundMesh.material.dispose();
+    }
+    if (entity.directionBackgroundMesh && entity.directionBackgroundMesh.geometry) {
+        entity.directionBackgroundMesh.geometry.dispose();
+    }
     if (entity.statusSpriteMesh && entity.statusSpriteMesh.material) {
         entity.statusSpriteMesh.material.dispose();
     }
@@ -1340,6 +1367,7 @@ export function refreshEntityIndicators(world, entity) {
     }
     entity.indicatorGroup = null;
     entity.statusBackgroundMesh = null;
+    entity.directionBackgroundMesh = null;
     entity.statusSpriteMesh = null;
     entity.hpSpriteMesh = null;
     entity.directionSpriteMesh = null;

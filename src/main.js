@@ -359,6 +359,37 @@ function ensureHud() {
     document.body.appendChild(hud);
 }
 
+function ensureEditorCoords() {
+    let coords = document.getElementById('editor-coords');
+    if (coords) return coords;
+    coords = document.createElement('div');
+    coords.id = 'editor-coords';
+    coords.style.position = 'fixed';
+    coords.style.bottom = '10px';
+    coords.style.left = '10px';
+    coords.style.color = 'white';
+    coords.style.textShadow = '2px 2px 4px rgba(0,0,0,0.8)';
+    coords.style.fontSize = '12px';
+    coords.style.fontFamily = '"Courier New", monospace';
+    coords.style.zIndex = '10';
+    coords.style.display = 'none';
+    document.body.appendChild(coords);
+    return coords;
+}
+
+function updateEditorCoords(world) {
+    const coords = ensureEditorCoords();
+    if (world.mode !== 'editor') {
+        coords.style.display = 'none';
+        return;
+    }
+    const player = world.getPlayerEntity();
+    if (!player) return;
+    coords.style.display = 'block';
+    const fmt = (value) => (Math.round(value * 100) / 100).toFixed(2);
+    coords.textContent = `XYZ: ${fmt(player.x)}, ${fmt(player.y)}, ${fmt(player.z)}`;
+}
+
 function getModeFromLocation() {
     if (window.__MODE__ === 'editor' || window.__MODE__ === 'game' || window.__MODE__ === 'shooter' || window.__MODE__ === 'integrated') {
         return window.__MODE__ === 'shooter' ? 'game' : window.__MODE__;
@@ -1815,6 +1846,7 @@ function animate(world) {
         updateEditorMovePreview(world);
         updateCurrentItemLabel(world);
         updateHud(world);
+        updateEditorCoords(world);
         
         // Atualiza câmera e listener de áudio
         const player = world.getPlayerEntity();

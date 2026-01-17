@@ -278,6 +278,12 @@ export default {
                 if (entity.statusBackgroundMesh && entity.statusBackgroundMesh.geometry) {
                     entity.statusBackgroundMesh.geometry.dispose();
                 }
+                if (entity.directionBackgroundMesh && entity.directionBackgroundMesh.material) {
+                    entity.directionBackgroundMesh.material.dispose();
+                }
+                if (entity.directionBackgroundMesh && entity.directionBackgroundMesh.geometry) {
+                    entity.directionBackgroundMesh.geometry.dispose();
+                }
                 if (entity.hpSpriteMesh && entity.hpSpriteMesh.material) {
                     entity.hpSpriteMesh.material.dispose();
                 }
