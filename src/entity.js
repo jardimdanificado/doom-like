@@ -958,6 +958,7 @@ export function updateHostileMovement(world, entity) {
 
 export function shootProjectileFromEntity(world, shooter, target) {
     if (!shooter.inventory || !shooter.selectedBlockType) return;
+    if (shooter.selectedBlockType.droppable === false) return;
     
     const ammoCount = shooter.inventory[shooter.selectedBlockType.id] || 0;
     if (ammoCount <= 0) return;

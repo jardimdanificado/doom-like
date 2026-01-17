@@ -8,7 +8,7 @@ export default {
     items: [],
     messages: [],
     playerEntityIndex: 0,
-    mode: 'shooter',
+    mode: 'game',
     
     ui: {
         interactionTarget: null,
@@ -28,7 +28,8 @@ export default {
         integrated: false,
         editorMoveCommand: null,
         editorMoveLine: null,
-        mapBounds: null
+        mapBounds: null,
+        fx: []
     },
 
     recalculateMapBounds() {
@@ -136,23 +137,31 @@ export default {
     
     createBlockMaterials(blockType) {
         const textures = this._internal.blockTextures;
+        const opacity = typeof blockType.opacity === 'number' ? blockType.opacity : 1;
+        const transparent = opacity < 1;
         
         if (blockType.textures.all) {
             const mat = new THREE.MeshLambertMaterial({ 
                 map: textures[blockType.textures.all],
-                transparent: blockType.id === BLOCK_TYPES.DOOR.id,
-                opacity: blockType.id === BLOCK_TYPES.DOOR.id ? 0.8 : 1
+                transparent: transparent,
+                opacity: opacity
             });
             return [mat, mat, mat, mat, mat, mat];
         } else if (blockType.textures.top) {
             const topMat = new THREE.MeshLambertMaterial({ 
-                map: textures[blockType.textures.top]
+                map: textures[blockType.textures.top],
+                transparent: transparent,
+                opacity: opacity
             });
             const sideMat = new THREE.MeshLambertMaterial({ 
-                map: textures[blockType.textures.side]
+                map: textures[blockType.textures.side],
+                transparent: transparent,
+                opacity: opacity
             });
             const bottomMat = new THREE.MeshLambertMaterial({ 
-                map: textures[blockType.textures.bottom]
+                map: textures[blockType.textures.bottom],
+                transparent: transparent,
+                opacity: opacity
             });
             return [sideMat, sideMat, topMat, bottomMat, sideMat, sideMat];
         }
@@ -162,10 +171,12 @@ export default {
         const textureKey = blockType.textures && (blockType.textures.all || blockType.textures.top);
         const texture = textureKey ? textures[textureKey] : null;
         const size = CONFIG.BLOCK_SIZE;
+        const opacity = typeof blockType.opacity === 'number' ? blockType.opacity : 1;
         const geometry = new THREE.PlaneGeometry(size, size);
         const material = new THREE.MeshLambertMaterial({
             map: texture || null,
             transparent: true,
+            opacity: opacity,
             side: THREE.DoubleSide,
             alphaTest: 0.1
         });
@@ -303,6 +314,14 @@ export default {
                 if (entity.debugPathLine.geometry) {
                     entity.debugPathLine.geometry.dispose();
                 }
+            }
+            if (entity._bloodStains && Array.isArray(entity._bloodStains)) {
+                entity._bloodStains.forEach((stain) => {
+                    if (stain && stain.parent) stain.parent.remove(stain);
+                    if (stain && stain.material) stain.material.dispose();
+                    if (stain && stain.geometry) stain.geometry.dispose();
+                });
+                entity._bloodStains = [];
             }
             if (this._internal.editorMoveCommand && this._internal.editorMoveCommand.entityId === entity.id) {
                 this._internal.editorMoveCommand = null;

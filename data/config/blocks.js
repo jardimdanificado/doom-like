@@ -4,10 +4,12 @@ export default {
         name: 'Pedra',
         solid: true,
         maxHP: 100,
-        breakDamage: 20,
-        bulletSpeed: 0.45,
-        bulletLifetime: 70,
+        breakDamage: 14,
+        bulletSpeed: 0.3,
+        bulletLifetime: 50,
         isFloor: false,
+        opacity: 1,
+        droppable: true,
         textures: {
             all: 'stone'
         }
@@ -17,10 +19,12 @@ export default {
         name: 'Grama',
         solid: true,
         maxHP: 50,
-        breakDamage: 30,
-        bulletSpeed: 0.35,
-        bulletLifetime: 50,
+        breakDamage: 3,
+        bulletSpeed: 0.18,
+        bulletLifetime: 20,
         isFloor: false,
+        opacity: 1,
+        droppable: true,
         textures: {
             top: 'grass',
             side: 'dirt',
@@ -32,10 +36,12 @@ export default {
         name: 'Madeira',
         solid: true,
         maxHP: 75,
-        breakDamage: 25,
-        bulletSpeed: 0.4,
-        bulletLifetime: 60,
+        breakDamage: 10,
+        bulletSpeed: 0.25,
+        bulletLifetime: 35,
         isFloor: false,
+        opacity: 1,
+        droppable: true,
         textures: {
             all: 'wood'
         }
@@ -45,10 +51,12 @@ export default {
         name: 'Ouro',
         solid: true,
         maxHP: 150,
-        breakDamage: 40,
-        bulletSpeed: 0.35,
-        bulletLifetime: 80,
+        breakDamage: 20,
+        bulletSpeed: 0.32,
+        bulletLifetime: 55,
         isFloor: false,
+        opacity: 1,
+        droppable: true,
         textures: {
             all: 'gold'
         },
@@ -70,10 +78,12 @@ export default {
         name: 'Porta',
         solid: true,
         maxHP: 60,
-        breakDamage: 22,
-        bulletSpeed: 0.3,
-        bulletLifetime: 40,
+        breakDamage: 8,
+        bulletSpeed: 0.18,
+        bulletLifetime: 16,
         isFloor: false,
+        opacity: 1,
+        droppable: false,
         textures: {
             all: 'door'
         },
@@ -106,7 +116,8 @@ export default {
                 }
                 if (targetBlock.mesh && Array.isArray(targetBlock.mesh.material)) {
                     targetBlock.mesh.material.forEach(mat => {
-                        mat.opacity = targetSolid ? 0.8 : 0.3;
+                        mat.opacity = targetSolid ? (targetBlock.type.opacity ?? 1) : 0.35;
+                        mat.transparent = mat.opacity < 1;
                     });
                 }
                 
@@ -127,10 +138,12 @@ export default {
         name: 'Areia',
         solid: true,
         maxHP: 40,
-        breakDamage: 35,
-        bulletSpeed: 0.4,
-        bulletLifetime: 60,
+        breakDamage: 2,
+        bulletSpeed: 0.18,
+        bulletLifetime: 18,
         isFloor: false,
+        opacity: 1,
+        droppable: true,
         textures: {
             all: 'sand'
         }
@@ -141,9 +154,11 @@ export default {
         solid: false,
         maxHP: 99999999,
         breakDamage: 0,
-        bulletSpeed: 0.4,
-        bulletLifetime: 60,
+        bulletSpeed: 0.22,
+        bulletLifetime: 26,
         isFloor: false,
+        opacity: 1,
+        droppable: false,
         render: 'cross',
         editorOnly: true,
         textures: {
@@ -155,10 +170,12 @@ export default {
         name: 'Planta',
         solid: false,
         maxHP: 10,
-        breakDamage: 1,
-        bulletSpeed: 0.3,
-        bulletLifetime: 50,
+        breakDamage: 4,
+        bulletSpeed: 0.25,
+        bulletLifetime: 30,
         isFloor: false,
+        opacity: 1,
+        droppable: true,
         render: 'cross',
         textures: {
             all: 'grass'

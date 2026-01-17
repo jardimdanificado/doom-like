@@ -141,7 +141,7 @@ export function updateItems(world) {
         item.mesh.lookAt(world._internal.camera.position);
         item.mesh.rotateZ(item.mesh.userData.spin);
         
-        if (world.mode !== 'shooter') continue;
+        if (world.mode !== 'game') continue;
         
         const recipients = [
             ...(player ? [player] : []),

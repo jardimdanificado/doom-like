@@ -3,27 +3,100 @@ import BLOCK_TYPES from '../data/config/blocks.js';
 import ITEMS from '../data/config/items.js';
 import { spawnBlockDrop, spawnItemDrop } from './item.js';
 
+const BLOOD_SPLASH_KEYS = [
+    'blood_red',
+    'blood_red_0',
+    'blood_red_1_old',
+    'blood_red_1_new',
+    'blood_red_2_old',
+    'blood_red_2_new',
+    'blood_red_3_old',
+    'blood_red_3_new',
+    'blood_red_4_old',
+    'blood_red_4_new',
+    'blood_red_5',
+    'blood_red_6',
+    'blood_red_7',
+    'blood_red_8',
+    'blood_red_9',
+    'blood_red_10',
+    'blood_red_11',
+    'blood_red_12',
+    'blood_red_13',
+    'blood_red_14',
+    'blood_red_15',
+    'blood_red_16',
+    'blood_red_17',
+    'blood_red_18',
+    'blood_red_19',
+    'blood_red_20',
+    'blood_red_21',
+    'blood_red_22',
+    'blood_red_23',
+    'blood_red_24',
+    'blood_red_25',
+    'blood_red_26',
+    'blood_red_27',
+    'blood_red_28',
+    'blood_red_29'
+];
+const BLOOD_PUDDLE_KEYS = [
+    'blood_puddle_red',
+    'blood_puddle_red_1',
+    'blood_puddle_red_2',
+    'blood_puddle_red_3',
+    'blood_puddle_red_4'
+];
+const WALL_BLOOD_KEYS = [
+    'wall_blood_0_north',
+    'wall_blood_1_north',
+    'wall_blood_3_north',
+    'wall_blood_4_north',
+    'wall_blood_5_north',
+    'wall_blood_6_north',
+    'wall_blood_7_north',
+    'wall_blood_8_north',
+    'wall_blood_9_north',
+    'wall_blood_10_north',
+    'wall_blood_11_north',
+    'wall_blood_12_north',
+    'wall_blood_13_north',
+    'wall_blood_14_north',
+    'wall_blood_15_north',
+    'wall_blood_16_north',
+    'wall_blood_17_north',
+    'wall_blood_18_north'
+];
+
 function createBlockMaterials(world, blockType) {
     const textures = world._internal.blockTextures;
+    const opacity = typeof blockType.opacity === 'number' ? blockType.opacity : 1;
+    const transparent = opacity < 1;
     
     if (blockType.textures.all) {
         const mat = new THREE.MeshLambertMaterial({ 
             map: textures[blockType.textures.all],
-            transparent: blockType.id === BLOCK_TYPES.DOOR.id,
-            opacity: blockType.id === BLOCK_TYPES.DOOR.id ? 0.8 : 1
+            transparent: transparent,
+            opacity: opacity
         });
         return [mat, mat, mat, mat, mat, mat];
     }
     
     if (blockType.textures.top) {
         const topMat = new THREE.MeshLambertMaterial({ 
-            map: textures[blockType.textures.top]
+            map: textures[blockType.textures.top],
+            transparent: transparent,
+            opacity: opacity
         });
         const sideMat = new THREE.MeshLambertMaterial({ 
-            map: textures[blockType.textures.side]
+            map: textures[blockType.textures.side],
+            transparent: transparent,
+            opacity: opacity
         });
         const bottomMat = new THREE.MeshLambertMaterial({ 
-            map: textures[blockType.textures.bottom]
+            map: textures[blockType.textures.bottom],
+            transparent: transparent,
+            opacity: opacity
         });
         return [sideMat, sideMat, topMat, bottomMat, sideMat, sideMat];
     }
@@ -32,18 +105,365 @@ function createBlockMaterials(world, blockType) {
     return [fallback, fallback, fallback, fallback, fallback, fallback];
 }
 
+function ensureFxStore(world) {
+    if (!world._internal.fx) {
+        world._internal.fx = [];
+    }
+}
+
+function addFx(world, fx) {
+    ensureFxStore(world);
+    if (fx.mesh && fx.mesh.material && typeof fx.mesh.material.opacity === 'number') {
+        fx.baseOpacity = fx.mesh.material.opacity;
+    }
+    world._internal.fx.push(fx);
+    world._internal.scene.add(fx.mesh);
+}
+
+function pickTexture(world, keys) {
+    const key = keys[Math.floor(Math.random() * keys.length)];
+    return world._internal.blockTextures[key] || null;
+}
+
+function spawnBloodSplash(world, position, direction) {
+    const texture = pickTexture(world, BLOOD_SPLASH_KEYS);
+    if (!texture) return;
+    const geometry = new THREE.PlaneGeometry(0.5, 0.5);
+    const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(position);
+    const velocity = direction.clone().multiplyScalar(0.06);
+    velocity.x += (Math.random() - 0.5) * 0.04;
+    velocity.y += 0.06 + Math.random() * 0.04;
+    velocity.z += (Math.random() - 0.5) * 0.04;
+    addFx(world, {
+        mesh,
+        velocity,
+        gravity: 0.004,
+        life: 26,
+        maxLife: 26,
+        fade: true,
+        faceCamera: true,
+        scaleStart: 0.2,
+        scaleEnd: 1.1
+    });
+}
+
+function spawnBloodDecal(world, point, normal, isFloor, keys = null, sizeOverride = null) {
+    const decalKeys = keys || (isFloor ? BLOOD_PUDDLE_KEYS : WALL_BLOOD_KEYS);
+    const texture = pickTexture(world, decalKeys);
+    if (!texture) return;
+    const size = typeof sizeOverride === 'number' ? sizeOverride : (isFloor ? 0.8 : 0.7);
+    const geometry = new THREE.PlaneGeometry(size, size);
+    const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(point).add(normal.clone().multiplyScalar(0.01));
+    if (isFloor) {
+        mesh.rotation.x = -Math.PI / 2;
+    } else {
+        mesh.lookAt(point.clone().add(normal));
+    }
+    addFx(world, {
+        mesh,
+        velocity: new THREE.Vector3(0, 0, 0),
+        gravity: 0,
+        life: 420,
+        maxLife: 420,
+        fade: true,
+        fadeDelay: 0.7
+    });
+}
+
+function findFloorHitUnderEntity(world, entity) {
+    const raycaster = world._internal.raycaster;
+    const origin = new THREE.Vector3(entity.x, entity.y + 0.2, entity.z);
+    const blockMeshes = world.blocks.map((block) => block.mesh).filter(Boolean);
+    if (!blockMeshes.length) return null;
+    raycaster.set(origin, new THREE.Vector3(0, -1, 0));
+    const hits = raycaster.intersectObjects(blockMeshes, false);
+    if (!hits.length) return null;
+    const hit = hits[0];
+    const block = world.blocks.find((b) => b.mesh === hit.object);
+    if (!block) return null;
+    return { hit, block };
+}
+
+function spawnBlockDebris(world, block, count = 4) {
+    if (!block.mesh) return;
+    const sourceMat = Array.isArray(block.mesh.material)
+        ? block.mesh.material[0]
+        : block.mesh.material;
+    const texture = sourceMat && sourceMat.map ? sourceMat.map : null;
+    for (let i = 0; i < count; i++) {
+        const geometry = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+        const material = new THREE.MeshLambertMaterial({
+            map: texture || null,
+            color: texture ? 0xffffff : 0xdddddd,
+            transparent: true,
+            opacity: 0.9
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set(
+            block.x + (Math.random() - 0.5) * 0.4,
+            block.y + 0.1 + Math.random() * 0.3,
+            block.z + (Math.random() - 0.5) * 0.4
+        );
+        const velocity = new THREE.Vector3(
+            (Math.random() - 0.5) * 0.08,
+            0.08 + Math.random() * 0.08,
+            (Math.random() - 0.5) * 0.08
+        );
+        addFx(world, {
+            mesh,
+            velocity,
+            gravity: 0.01,
+            life: 32 + Math.floor(Math.random() * 10),
+            maxLife: 42,
+            fade: true,
+            spin: new THREE.Vector3(
+                (Math.random() - 0.5) * 0.2,
+                (Math.random() - 0.5) * 0.2,
+                (Math.random() - 0.5) * 0.2
+            )
+        });
+    }
+}
+
+function addBloodStain(world, entity) {
+    if (!entity.mesh) return;
+    const texture = pickTexture(world, BLOOD_SPLASH_KEYS);
+    if (!texture) return;
+    const width = (entity.npcData && entity.npcData.width)
+        || (entity.mesh.geometry && entity.mesh.geometry.parameters && entity.mesh.geometry.parameters.width)
+        || 0.8;
+    const height = (entity.npcData && entity.npcData.height)
+        || (entity.mesh.geometry && entity.mesh.geometry.parameters && entity.mesh.geometry.parameters.height)
+        || 1.4;
+    const size = 0.25 + Math.random() * 0.2;
+    const geometry = new THREE.PlaneGeometry(size, size);
+    const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        opacity: 0.85,
+        alphaTest: 0.1,
+        depthWrite: false
+    });
+    const stain = new THREE.Mesh(geometry, material);
+    stain.position.set(
+        (Math.random() - 0.5) * width * 0.4,
+        (Math.random() - 0.5) * height * 0.4,
+        0.01
+    );
+    stain.rotation.z = Math.random() * Math.PI * 2;
+    entity.mesh.add(stain);
+    entity._bloodStains = entity._bloodStains || [];
+    entity._bloodStains.push(stain);
+    if (entity._bloodStains.length > 6) {
+        const old = entity._bloodStains.shift();
+        if (old && old.parent) old.parent.remove(old);
+        if (old && old.material) old.material.dispose();
+        if (old && old.geometry) old.geometry.dispose();
+    }
+}
+
+function flashEntityRed(entity) {
+    if (!entity.mesh || !entity.mesh.material) return;
+    const material = entity.mesh.material;
+    if (!material.color) return;
+    const originalColor = material.color.getHex();
+    material.color.setHex(0xff0000);
+    setTimeout(() => {
+        if (entity.mesh && entity.mesh.material && entity.mesh.material.color) {
+            entity.mesh.material.color.setHex(originalColor);
+        }
+    }, 100);
+}
+
+function flashBlockWhite(block) {
+    if (!block.mesh || !block.mesh.material) return;
+    const mats = Array.isArray(block.mesh.material) ? block.mesh.material : [block.mesh.material];
+    const originals = mats.map((mat) => ({
+        color: mat.color ? mat.color.clone() : null
+    }));
+    mats.forEach((mat) => {
+        if (mat.color) mat.color.setHex(0xffffff);
+    });
+    setTimeout(() => {
+        if (!block.mesh || !block.mesh.material) return;
+        const matsRestore = Array.isArray(block.mesh.material) ? block.mesh.material : [block.mesh.material];
+        matsRestore.forEach((mat, idx) => {
+            const original = originals[idx];
+            if (!original) return;
+            if (mat.color && original.color) mat.color.copy(original.color);
+        });
+    }, 80);
+}
+
+function applyEntityHitEffects(world, entity, direction) {
+    flashEntityRed(entity);
+    addBloodStain(world, entity);
+    const base = new THREE.Vector3(entity.x, entity.y + CONFIG.ENTITY_HEIGHT * 0.6, entity.z);
+    spawnBloodSplash(world, base, direction);
+    if (entity.onGround) {
+        const floorHit = findFloorHitUnderEntity(world, entity);
+        if (floorHit) {
+            spawnBloodDecal(world, floorHit.hit.point, new THREE.Vector3(0, 1, 0), true);
+        }
+    }
+    if (direction.y < -0.35) {
+        const floorHit = findFloorHitUnderEntity(world, entity);
+        if (floorHit) {
+            spawnBloodDecal(world, floorHit.hit.point, new THREE.Vector3(0, 1, 0), true, BLOOD_SPLASH_KEYS, 0.6);
+        }
+    }
+    const raycaster = world._internal.raycaster;
+    const blockMeshes = world.blocks.map((block) => block.mesh).filter(Boolean);
+    if (!blockMeshes.length) return;
+    const rayDir = direction.clone().normalize();
+    raycaster.set(base, rayDir);
+    const hits = raycaster.intersectObjects(blockMeshes, false);
+    if (!hits.length) return;
+    const hit = hits[0];
+    if (hit.distance > 1.6) return;
+    const block = world.blocks.find((b) => b.mesh === hit.object);
+    if (!block) return;
+    const normal = hit.face && hit.face.normal
+        ? hit.face.normal.clone()
+        : hit.point.clone().sub(new THREE.Vector3(block.x, block.y, block.z)).normalize();
+    const isFloor = block.isFloor || Math.abs(normal.y) > 0.6;
+    if (!isFloor || direction.y >= -0.35) {
+        spawnBloodDecal(world, hit.point, normal, isFloor);
+    }
+}
+
+function applyBlockHitEffects(world, block) {
+    flashBlockWhite(block);
+    spawnBlockDebris(world, block, 4);
+}
+
+function updateFx(world) {
+    const fxList = world._internal.fx || [];
+    if (!fxList.length) return;
+    const camera = world._internal.camera;
+    for (let i = fxList.length - 1; i >= 0; i--) {
+        const fx = fxList[i];
+        fx.life -= 1;
+        if (fx.velocity) {
+            fx.mesh.position.add(fx.velocity);
+            if (fx.gravity) {
+                fx.velocity.y -= fx.gravity;
+            }
+        }
+        if (fx.spin) {
+            fx.mesh.rotation.x += fx.spin.x;
+            fx.mesh.rotation.y += fx.spin.y;
+            fx.mesh.rotation.z += fx.spin.z;
+        }
+        if (fx.faceCamera && camera) {
+            fx.mesh.lookAt(camera.position);
+        }
+        if (fx.scaleStart !== undefined && fx.scaleEnd !== undefined) {
+            const t = 1 - fx.life / fx.maxLife;
+            const scale = fx.scaleStart + (fx.scaleEnd - fx.scaleStart) * t;
+            fx.mesh.scale.set(scale, scale, scale);
+        }
+        if (fx.fade && fx.mesh.material) {
+            const t = 1 - fx.life / fx.maxLife;
+            const delay = fx.fadeDelay || 0;
+            const tFade = t <= delay ? 0 : (t - delay) / Math.max(0.0001, 1 - delay);
+            const baseOpacity = typeof fx.baseOpacity === 'number' ? fx.baseOpacity : fx.mesh.material.opacity;
+            fx.mesh.material.opacity = Math.max(0, baseOpacity * (1 - tFade));
+        }
+        if (fx.life <= 0) {
+            world._internal.scene.remove(fx.mesh);
+            if (fx.mesh.material) fx.mesh.material.dispose();
+            if (fx.mesh.geometry) fx.mesh.geometry.dispose();
+            fxList.splice(i, 1);
+        }
+    }
+}
+
+function tryMeleeHit(world, attacker) {
+    const camera = world._internal.camera;
+    const raycaster = world._internal.raycaster;
+    const entityTargets = world.entities
+        .filter((entity) => entity.mesh && entity !== attacker)
+        .map((entity) => entity.mesh);
+    const blockTargets = world.blocks.map((block) => block.mesh).filter(Boolean);
+    const targets = [...entityTargets, ...blockTargets];
+    if (!targets.length) return false;
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const hits = raycaster.intersectObjects(targets, false);
+    if (!hits.length) return false;
+    const hit = hits[0];
+    if (hit.distance > CONFIG.MELEE_RANGE) return false;
+    const entity = world.entities.find((e) => e.mesh === hit.object);
+    if (entity) {
+        const damage = CONFIG.MELEE_DAMAGE;
+        entity.hp = Math.max(0, entity.hp - damage);
+        console.log(`${entity.name} levou ${damage} de dano (melee). HP: ${entity.hp}/${entity.maxHP}`);
+        const direction = new THREE.Vector3();
+        camera.getWorldDirection(direction);
+        applyEntityHitEffects(world, entity, direction);
+        return true;
+    }
+    const block = world.blocks.find((b) => b.mesh === hit.object);
+    if (!block) return false;
+    const damage = CONFIG.MELEE_DAMAGE;
+    block.hp -= damage;
+    console.log(`${block.type.name} levou ${damage} de dano (melee). HP: ${block.hp}/${block.maxHP}`);
+    applyBlockHitEffects(world, block);
+    if (block.hp <= 0) {
+        if (world.mode === 'game' && block.type.droppable) {
+            spawnBlockDrop(world, block.type, 1, {
+                x: block.x,
+                y: block.y + 0.3,
+                z: block.z
+            });
+        }
+        world.removeBlock(block);
+    }
+    return true;
+}
+
 export function createProjectile(world) {
     const player = world.getPlayerEntity();
     if (!player) return;
     const isEditor = player.isEditor || world.mode === 'editor';
     
-    if (player.selectedItem && player.selectedItem.kind !== 'block') return;
-    if (!player.selectedBlockType) return;
+    if (player.selectedItem && player.selectedItem.kind !== 'block' && player.selectedItem.kind !== 'empty') return;
+    if (player.selectedItem && player.selectedItem.kind === 'empty') {
+        if (!isEditor) {
+            tryMeleeHit(world, player);
+        }
+        return;
+    }
+    if (player.selectedBlockType && player.selectedBlockType.droppable === false) {
+        console.log(`${player.selectedBlockType.name} não pode ser atirado.`);
+        return;
+    }
+    if (!player.selectedBlockType) {
+        if (!isEditor) {
+            tryMeleeHit(world, player);
+        }
+        return;
+    }
 
     const ammoCount = player.inventory ? (player.inventory[player.selectedBlockType.id] || 0) : 0;
     
     if (!isEditor && ammoCount <= 0) {
         console.log(`Sem munição de ${player.selectedBlockType.name}!`);
+        tryMeleeHit(world, player);
         return;
     }
     
@@ -112,7 +532,7 @@ export function placeBlock(world) {
     if (!player.selectedBlockType) return;
 
     const ammoCount = player.inventory ? (player.inventory[player.selectedBlockType.id] || 0) : 0;
-    if (world.mode === 'shooter') {
+    if (world.mode === 'game') {
         const blockHalf = CONFIG.BLOCK_SIZE / 2;
         const target = world.ui.targetBlockPosition;
         const blockBox = {
@@ -194,16 +614,8 @@ export function updateProjectiles(world) {
                     };
                 }
                 
-                // Feedback visual
-                if (entity.mesh && entity.mesh.material) {
-                    const originalColor = entity.mesh.material.color.getHex();
-                    entity.mesh.material.color.setHex(0xff0000);
-                    setTimeout(() => {
-                        if (entity.mesh && entity.mesh.material) {
-                            entity.mesh.material.color.setHex(originalColor);
-                        }
-                    }, 100);
-                }
+                const direction = proj.velocity.clone().normalize();
+                applyEntityHitEffects(world, entity, direction);
                 
                 if (entity.hp <= 0) {
                     console.log(`${entity.name} foi derrotado!`);
@@ -240,28 +652,14 @@ export function updateProjectiles(world) {
             
             if (distance < 0.5) {
                 block.hp -= proj.damage;
-                
-                if (Array.isArray(block.mesh.material)) {
-                    const originalColors = [];
-                    block.mesh.material.forEach((mat, idx) => {
-                        originalColors[idx] = mat.color.clone();
-                        mat.color.setHex(0xffffff);
-                    });
-                    setTimeout(() => {
-                        if (block.mesh && block.mesh.material) {
-                            block.mesh.material.forEach((mat, idx) => {
-                                mat.color.copy(originalColors[idx]);
-                            });
-                        }
-                    }, 50);
-                }
+                applyBlockHitEffects(world, block);
                 
                 console.log(`${block.type.name} HP: ${block.hp}/${block.maxHP}`);
                 
                 if (block.hp <= 0) {
                     console.log(`${block.type.name} destruído!`);
                     
-                    if (world.mode === 'shooter') {
+                    if (world.mode === 'game' && block.type.droppable) {
                         spawnBlockDrop(world, block.type, 1, {
                             x: block.x,
                             y: block.y + 0.3,
@@ -287,6 +685,7 @@ export function updateProjectiles(world) {
             world.projectiles.splice(i, 1);
         }
     }
+    updateFx(world);
 }
 
 function dropEntityInventory(world, entity) {

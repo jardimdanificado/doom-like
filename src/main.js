@@ -93,7 +93,7 @@ async function init() {
     world._internal.renderer = renderer;
     const bootMode = getModeFromLocation();
     world._internal.integrated = bootMode === 'integrated';
-    world.mode = bootMode === 'integrated' ? 'shooter' : bootMode;
+    world.mode = bootMode === 'integrated' ? 'game' : bootMode;
     document.body.dataset.mode = world.mode;
     ensureItemLabel();
     ensureHud();
@@ -360,21 +360,25 @@ function ensureHud() {
 }
 
 function getModeFromLocation() {
-    if (window.__MODE__ === 'editor' || window.__MODE__ === 'shooter' || window.__MODE__ === 'integrated') {
-        return window.__MODE__;
+    if (window.__MODE__ === 'editor' || window.__MODE__ === 'game' || window.__MODE__ === 'shooter' || window.__MODE__ === 'integrated') {
+        return window.__MODE__ === 'shooter' ? 'game' : window.__MODE__;
     }
     const params = new URLSearchParams(window.location.search);
-    return params.get('mode') === 'editor' ? 'editor' : 'shooter';
+    const queryMode = params.get('mode');
+    if (queryMode === 'editor') return 'editor';
+    if (queryMode === 'game' || queryMode === 'shooter') return 'game';
+    return 'game';
 }
 
 function setWorldMode(world, mode) {
-    if (mode !== 'editor' && mode !== 'shooter') return;
-    world.mode = mode;
+    const normalized = mode === 'shooter' ? 'game' : mode;
+    if (normalized !== 'editor' && normalized !== 'game') return;
+    world.mode = normalized;
     document.body.dataset.mode = world.mode;
     const player = world.getPlayerEntity();
     if (player) {
-        player.isEditor = mode === 'editor';
-        if (mode === 'editor') {
+        player.isEditor = normalized === 'editor';
+        if (normalized === 'editor') {
             if (!player._savedInventory) {
                 player._savedInventory = player.inventory ? { ...player.inventory } : null;
                 player._savedItemInventory = player.itemInventory ? { ...player.itemInventory } : null;
@@ -528,6 +532,61 @@ function addMenuItem(menu, label, onClick) {
     menu.appendChild(item);
 }
 
+function formatEditorValue(value, depth = 0) {
+    const indent = '  ';
+    const pad = indent.repeat(depth);
+    const padInner = indent.repeat(depth + 1);
+    if (typeof value === 'function') {
+        return value.toString();
+    }
+    if (value === undefined) {
+        return 'undefined';
+    }
+    if (value === null || typeof value !== 'object') {
+        return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+        if (!value.length) return '[]';
+        return `[\n${value.map((item) => `${padInner}${formatEditorValue(item, depth + 1)}`).join(',\n')}\n${pad}]`;
+    }
+    const entries = Object.entries(value);
+    if (!entries.length) return '{}';
+    const props = entries.map(([key, val]) => {
+        const safeKey = /^[A-Za-z_$][0-9A-Za-z_$]*$/.test(key) ? key : JSON.stringify(key);
+        return `${padInner}${safeKey}: ${formatEditorValue(val, depth + 1)}`;
+    });
+    return `{\n${props.join(',\n')}\n${pad}}`;
+}
+
+function getEditorContext(world) {
+    return {
+        world,
+        CONFIG,
+        BLOCK_TYPES,
+        ITEMS,
+        NPC_TYPES,
+        FACTIONS,
+        THREE,
+        spawnMessage,
+        audioSystem,
+        createProjectile,
+        placeBlock,
+        spawnBlockDrop,
+        spawnItemDrop,
+        useItem,
+        getGroundLevel
+    };
+}
+
+function parseEditorPayload(text, context) {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const keys = Object.keys(context);
+    const values = Object.values(context);
+    const fn = new Function(...keys, `"use strict"; return (${trimmed});`);
+    return fn(...values);
+}
+
 function editEntityFromPrompt(entity) {
     const snapshot = {
         name: entity.name,
@@ -539,12 +598,14 @@ function editEntityFromPrompt(entity) {
         isInteractable: entity.isInteractable,
         selectedBlockTypeId: entity.selectedBlockType ? entity.selectedBlockType.id : null,
         inventory: entity.inventory || {},
-        itemInventory: entity.itemInventory || {}
+        itemInventory: entity.itemInventory || {},
+        onInteract: entity.onInteract || null,
+        onUpdate: entity.onUpdate || null
     };
     const panel = ensureCodeEditorPanel('entity-editor-panel');
     const textarea = panel.querySelector('#entity-editor-panel-textarea');
     const saveBtn = panel.querySelector('#entity-editor-panel-save');
-    textarea.value = JSON.stringify(snapshot, null, 2);
+    textarea.value = formatEditorValue(snapshot);
     panel.style.display = 'block';
     if (document.pointerLockElement === document.body) {
         document.exitPointerLock();
@@ -553,7 +614,8 @@ function editEntityFromPrompt(entity) {
         const text = textarea.value;
         if (!text) return;
         try {
-            const data = JSON.parse(text);
+            const data = parseEditorPayload(text, getEditorContext(world));
+            if (!data || typeof data !== 'object') return;
         const oldName = entity.name;
         if (typeof data.name === 'string') entity.name = data.name;
         if (typeof data.faction === 'string') entity.faction = data.faction;
@@ -568,10 +630,16 @@ function editEntityFromPrompt(entity) {
         }
         if (data.inventory && typeof data.inventory === 'object') entity.inventory = data.inventory;
         if (data.itemInventory && typeof data.itemInventory === 'object') entity.itemInventory = data.itemInventory;
+        if (typeof data.onInteract === 'function' || data.onInteract === null) {
+            entity.onInteract = data.onInteract || null;
+        }
+        if (typeof data.onUpdate === 'function' || data.onUpdate === null) {
+            entity.onUpdate = data.onUpdate || null;
+        }
         refreshEntityIndicators(world, entity);
         panel.style.display = 'none';
         } catch (err) {
-            console.warn('JSON invalido:', err);
+            console.warn('JS invalido:', err);
         }
     };
 }
@@ -607,7 +675,7 @@ function openEditorContextMenu(world, event) {
             addMenuItem(menu, 'Log no console', () => console.log('Entity:', entity));
         }
     } else if (target && target.kind === 'block') {
-        addMenuItem(menu, 'Editar bloco (JSON)', () => editBlockFromPanel(world, target.block.type));
+        addMenuItem(menu, 'Editar bloco (JS)', () => editBlockFromPanel(world, target.block.type));
         addMenuItem(menu, 'Criar bloco a partir deste', () => cloneBlockTypeFrom(world, target.block.type));
         addMenuItem(menu, 'Editar world (JSON)', () => editWorldFromPanel(world));
     } else {
@@ -694,14 +762,17 @@ function editBlockFromPanel(world, blockType) {
         bulletSpeed: blockType.bulletSpeed,
         bulletLifetime: blockType.bulletLifetime,
         isFloor: blockType.isFloor,
+        opacity: typeof blockType.opacity === 'number' ? blockType.opacity : 1,
         render: blockType.render || null,
         editorOnly: !!blockType.editorOnly,
-        textures: blockType.textures || null
+        droppable: blockType.droppable !== false,
+        textures: blockType.textures || null,
+        onUse: blockType.onUse || null
     };
     const panel = ensureCodeEditorPanel('block-editor-panel');
     const textarea = panel.querySelector('#block-editor-panel-textarea');
     const saveBtn = panel.querySelector('#block-editor-panel-save');
-    textarea.value = JSON.stringify(snapshot, null, 2);
+    textarea.value = formatEditorValue(snapshot);
     panel.style.display = 'block';
     if (document.pointerLockElement === document.body) {
         document.exitPointerLock();
@@ -710,7 +781,8 @@ function editBlockFromPanel(world, blockType) {
         const text = textarea.value;
         if (!text) return;
         try {
-            const data = JSON.parse(text);
+            const data = parseEditorPayload(text, getEditorContext(world));
+            if (!data || typeof data !== 'object') return;
             if (typeof data.name === 'string') blockType.name = data.name;
             if (typeof data.solid === 'boolean') blockType.solid = data.solid;
             if (typeof data.maxHP === 'number') blockType.maxHP = data.maxHP;
@@ -718,12 +790,25 @@ function editBlockFromPanel(world, blockType) {
             if (typeof data.bulletSpeed === 'number') blockType.bulletSpeed = data.bulletSpeed;
             if (typeof data.bulletLifetime === 'number') blockType.bulletLifetime = data.bulletLifetime;
             if (typeof data.isFloor === 'boolean') blockType.isFloor = data.isFloor;
+            if (typeof data.opacity === 'number') blockType.opacity = data.opacity;
             if (typeof data.render === 'string' || data.render === null) blockType.render = data.render || undefined;
             if (typeof data.editorOnly === 'boolean') blockType.editorOnly = data.editorOnly;
+            if (typeof data.droppable === 'boolean') blockType.droppable = data.droppable;
             if (data.textures && typeof data.textures === 'object') blockType.textures = data.textures;
+            if (typeof data.onUse === 'function') {
+                blockType.onUse = data.onUse;
+            } else if (data.onUse === null) {
+                delete blockType.onUse;
+            }
+            const hasUseFunction = typeof blockType.onUse === 'function';
+            for (const block of world.blocks) {
+                if (block.type === blockType) {
+                    block.hasUseFunction = hasUseFunction;
+                }
+            }
             panel.style.display = 'none';
         } catch (err) {
-            console.warn('JSON invalido:', err);
+            console.warn('JS invalido:', err);
         }
     };
 }
@@ -814,7 +899,7 @@ function editWorldFromPanel(world) {
         if (!text) return;
         try {
             const data = JSON.parse(text);
-            if (data.mode === 'editor' || data.mode === 'shooter') {
+            if (data.mode === 'editor' || data.mode === 'game' || data.mode === 'shooter') {
                 setWorldMode(world, data.mode);
             }
             if (typeof data.playerEntityIndex === 'number') {
@@ -1294,7 +1379,7 @@ function applySelection(world, entry) {
 function updateCurrentItemLabel(world) {
     const label = document.getElementById('current-item');
     if (!label) return;
-    if (world.mode === 'shooter') {
+    if (world.mode === 'game') {
         label.style.display = 'none';
         return;
     }
@@ -1324,7 +1409,7 @@ function updateCurrentItemLabel(world) {
         const amount = world.mode === 'editor' ? '∞' : count;
         label.textContent = `Item: ${itemDef ? itemDef.name : '-'} x${amount}`;
     } else if (player.selectedItem.kind === 'empty') {
-        label.textContent = 'Item: Vazio';
+        label.textContent = 'Item: Mão';
     } else if (player.selectedItem.kind === 'entity') {
         if (player.selectedItem.action === 'despawn') {
             label.textContent = 'Item: Despawn';
@@ -1339,7 +1424,7 @@ function updateCurrentItemLabel(world) {
 function updateHud(world) {
     const hud = document.getElementById('hud');
     if (!hud) return;
-    if (world.mode !== 'shooter') {
+    if (world.mode !== 'game') {
         hud.style.display = 'none';
         return;
     }
@@ -1369,7 +1454,7 @@ function updateHud(world) {
             itemName = itemDef ? itemDef.name : '-';
             itemCount = itemDef && player.itemInventory ? (player.itemInventory[itemDef.id] || 0) : 0;
         } else if (player.selectedItem.kind === 'empty') {
-            itemName = 'Vazio';
+            itemName = 'Mão';
             itemCount = '-';
         } else if (player.selectedItem.kind === 'entity') {
             itemName = 'Spawner';
@@ -1418,7 +1503,7 @@ function onKeyDown(world, e) {
     const player = world.getPlayerEntity();
     if (e.code === 'Tab') {
         e.preventDefault();
-        const nextMode = world.mode === 'editor' ? 'shooter' : 'editor';
+        const nextMode = world.mode === 'editor' ? 'game' : 'editor';
         setWorldMode(world, nextMode);
         return;
     }
