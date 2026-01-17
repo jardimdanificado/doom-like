@@ -23,7 +23,8 @@ export default {
         blockTextures: {},
         texturesLoaded: false,
         keys: {},
-        mapCenter: { x: 0, z: 0 }
+        mapCenter: { x: 0, z: 0 },
+        usedNames: new Set()
     },
     
     getPlayerEntity() {
@@ -187,6 +188,8 @@ export default {
             npcData: entityData.npcData || null,
             audioInstance: entityData.audioInstance || null,
             npcTypeId: entityData.npcTypeId || null,
+            faction: entityData.faction || 'neutral',
+            canSeePlayer: false,
             
             // Sistema de pathfinding
             target: entityData.target || null,
@@ -198,7 +201,9 @@ export default {
             isHostile: entityData.isHostile || false,
             shootCooldown: 0,
             targetEntity: null,
-            blockInteractCooldown: 0
+            blockInteractCooldown: 0,
+            alertTimer: 0,
+            alertTarget: null
         };
         
         this.entities.push(entity);
@@ -210,6 +215,42 @@ export default {
         if (index > -1) {
             if (entity.mesh) {
                 this._internal.scene.remove(entity.mesh);
+            }
+            if (entity.indicatorGroup) {
+                this._internal.scene.remove(entity.indicatorGroup);
+                if (entity.nameTagTexture) {
+                    entity.nameTagTexture.dispose();
+                }
+                if (entity.nameTagMesh && entity.nameTagMesh.material) {
+                    entity.nameTagMesh.material.dispose();
+                }
+                if (entity.nameTagMesh && entity.nameTagMesh.geometry) {
+                    entity.nameTagMesh.geometry.dispose();
+                }
+                if (entity.statusSpriteMesh && entity.statusSpriteMesh.material) {
+                    entity.statusSpriteMesh.material.dispose();
+                }
+                if (entity.statusSpriteMesh && entity.statusSpriteMesh.geometry) {
+                    entity.statusSpriteMesh.geometry.dispose();
+                }
+                if (entity.statusBackgroundMesh && entity.statusBackgroundMesh.material) {
+                    entity.statusBackgroundMesh.material.dispose();
+                }
+                if (entity.statusBackgroundMesh && entity.statusBackgroundMesh.geometry) {
+                    entity.statusBackgroundMesh.geometry.dispose();
+                }
+                if (entity.hpSpriteMesh && entity.hpSpriteMesh.material) {
+                    entity.hpSpriteMesh.material.dispose();
+                }
+                if (entity.hpSpriteMesh && entity.hpSpriteMesh.geometry) {
+                    entity.hpSpriteMesh.geometry.dispose();
+                }
+                if (entity.directionSpriteMesh && entity.directionSpriteMesh.material) {
+                    entity.directionSpriteMesh.material.dispose();
+                }
+                if (entity.directionSpriteMesh && entity.directionSpriteMesh.geometry) {
+                    entity.directionSpriteMesh.geometry.dispose();
+                }
             }
             this.entities.splice(index, 1);
             

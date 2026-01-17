@@ -6,6 +6,8 @@ import NPC_TYPES from "../data/config/npcs.js"
 import BLOCK_TYPES from "../data/config/blocks.js"
 import ITEMS from "../data/config/items.js"
 import texturesToLoad from "../data/config/textures.js"
+import { vocabulario } from "../lib/vocabulario.js"
+import { FACTIONS, FACTION_ORDER } from "../data/config/factions.js"
 import world from "./world.js"
 import { updateEntity, checkInteractionTarget } from "./entity.js"
 import { handleInteraction } from './entity.js';
@@ -19,6 +21,48 @@ import audioSystem from './audio.js';
 // ============================================================
 // INICIALIZAÇÃO
 // ============================================================
+function getFactionName(factionId) {
+    const entry = Object.values(FACTIONS).find((faction) => faction.id === factionId);
+    return entry ? entry.name : factionId;
+}
+
+function getRandomNamePart() {
+    const names = vocabulario.nomes;
+    for (let attempt = 0; attempt < 30; attempt++) {
+        const raw = names[Math.floor(Math.random() * names.length)] || '';
+        const clean = raw.replace(/[^a-záéíóúâêôãõç]/gi, '');
+        if (clean.length >= 2) return clean;
+    }
+    return 'SemNome';
+}
+
+function generateUniqueName(world) {
+    const used = world._internal.usedNames;
+    for (let attempt = 0; attempt < 80; attempt++) {
+        const first = getRandomNamePart();
+        const last = getRandomNamePart();
+        const useSurname = Math.random() < 0.55 && last !== first;
+        const name = useSurname ? `${first} ${last}` : first;
+        if (!used.has(name)) {
+            used.add(name);
+            return name;
+        }
+    }
+    const fallback = `SemNome${used.size + 1}`;
+    used.add(fallback);
+    return fallback;
+}
+
+function ensureUniqueName(world, name) {
+    const used = world._internal.usedNames;
+    if (!name) return generateUniqueName(world);
+    if (!used.has(name)) {
+        used.add(name);
+        return name;
+    }
+    return generateUniqueName(world);
+}
+
 async function init() {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87CEEB);
@@ -158,6 +202,11 @@ async function initWorld(world) {
 
 function createPlayer(world) {
     const isEditor = world.mode === 'editor';
+    const playerNpcData = {
+        texture: 'npc',
+        width: 0.8,
+        height: 1.6
+    };
     const editorInventory = {};
     if (isEditor) {
         Object.values(BLOCK_TYPES).forEach((blockType) => {
@@ -186,15 +235,17 @@ function createPlayer(world) {
         itemInventory: {},
         selectedBlockType: BLOCK_TYPES.GRASS,
         selectedItem: { kind: 'block', id: BLOCK_TYPES.GRASS.id },
-        npcData: null,
+        npcData: playerNpcData,
         hp: isEditor ? 999999 : 100,
-        maxHP: isEditor ? 999999 : 100
+        maxHP: isEditor ? 999999 : 100,
+        faction: FACTIONS.PLAYER.id
     });
 }
 
-function createNpcEntity(world, npcType, position) {
+function createNpcEntity(world, npcType, position, nameOverride = null, factionOverride = null) {
+    const entityName = nameOverride ? ensureUniqueName(world, nameOverride) : generateUniqueName(world);
     const entity = world.addEntity({
-        name: npcType.name,
+        name: entityName,
         type: 'npc',
         x: position.x,
         y: position.y,
@@ -202,9 +253,11 @@ function createNpcEntity(world, npcType, position) {
         hp: npcType.maxHP,
         maxHP: npcType.maxHP,
         isControllable: true,
-        isInteractable: true,
+        isInteractable: npcType.interactable !== false,
         npcData: npcType,
         npcTypeId: npcType.id,
+        faction: factionOverride || npcType.faction || 'neutral',
+        isHostile: !!npcType.isHostile,
         inventory: {
             [BLOCK_TYPES.STONE.id]: 50,
             [BLOCK_TYPES.GRASS.id]: 10,
@@ -439,6 +492,8 @@ function exportMap(world) {
             .map((entity) => ({
                 type: entity.type,
                 npcTypeId: entity.npcTypeId || (entity.npcData ? entity.npcData.id : null),
+                name: entity.name || null,
+                faction: entity.faction || null,
                 x: entity.x,
                 y: entity.y,
                 z: entity.z,
@@ -476,6 +531,8 @@ function applyMap(world, payload) {
         console.warn('Mapa invalido.');
         return;
     }
+
+    world._internal.usedNames = new Set();
     
     world.clearBlocks();
     for (const item of world.items) {
@@ -521,7 +578,13 @@ function applyMap(world, payload) {
             const npcType = getNpcTypeById(entry.npcTypeId);
             let entity = null;
             if (npcType) {
-                entity = createNpcEntity(world, npcType, { x: entry.x, y: entry.y, z: entry.z });
+                entity = createNpcEntity(
+                    world,
+                    npcType,
+                    { x: entry.x, y: entry.y, z: entry.z },
+                    entry.name || null,
+                    entry.faction || null
+                );
             }
             if (!entity) continue;
             entity.yaw = entry.yaw || 0;
@@ -635,7 +698,15 @@ function buildSelectionList(world, player) {
     });
 
     if (isEditor) {
-        Object.values(NPC_TYPES).forEach((npcType) => {
+        const npcList = Object.values(NPC_TYPES).slice().sort((a, b) => {
+            const ia = FACTION_ORDER.indexOf(a.faction || '');
+            const ib = FACTION_ORDER.indexOf(b.faction || '');
+            const fa = ia === -1 ? 999 : ia;
+            const fb = ib === -1 ? 999 : ib;
+            if (fa !== fb) return fa - fb;
+            return a.name.localeCompare(b.name);
+        });
+        npcList.forEach((npcType) => {
             list.push({ kind: 'entity', action: 'spawn', npcType });
         });
         list.push({ kind: 'entity', action: 'despawn' });
@@ -734,7 +805,8 @@ function updateCurrentItemLabel(world) {
             label.textContent = 'Item: Despawn';
         } else {
             const npcType = getNpcTypeById(player.selectedItem.npcTypeId);
-            label.textContent = `Item: Spawn ${npcType ? npcType.name : '-'}`;
+            const factionLabel = npcType ? getFactionName(npcType.faction || 'neutral') : '-';
+            label.textContent = `Item: Spawn ${npcType ? npcType.name : '-'} (${factionLabel})`;
         }
     }
 }

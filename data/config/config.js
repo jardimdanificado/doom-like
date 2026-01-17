@@ -24,5 +24,10 @@ export default {
     MAX_PATH_ITERATIONS: 200,
     HOSTILE_DETECTION_RANGE: 10,
     HOSTILE_ATTACK_RANGE: 8,
-    HOSTILE_SHOOT_COOLDOWN: 60 // frames entre disparos
+    HOSTILE_SHOOT_COOLDOWN: 60, // frames entre disparos
+    SHOT_DETECTION_RANGE: 20,
+
+    VISION_RANGE: 12,
+    VISION_FOV_DEG: 90,
+    PROXIMITY_DETECT_RANGE: 2.2
 };

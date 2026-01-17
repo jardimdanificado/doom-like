@@ -1,6 +1,32 @@
 import CONFIG from '../data/config/config.js';
 import BLOCK_TYPES from '../data/config/blocks.js';
 import { checkCollision, getGroundLevel } from './collision.js';
+import { getFactionRelation } from '../data/config/factions.js';
+import { alertEntitiesFromShot } from './bullet.js';
+
+const aiRaycaster = new THREE.Raycaster();
+const VISION_ICONS = {
+    friendly: { seen: 'sensed_friendly', unseen: 'sensed_friendly_unseen' },
+    hostile: { seen: 'sensed_hostile', unseen: 'sensed_hostile_unseen' }
+};
+const DIRECTION_ICONS = [
+    'travel_to_1',
+    'travel_to_2',
+    'travel_to_3',
+    'travel_to_4',
+    'travel_to_5',
+    'travel_to_6',
+    'travel_to_7',
+    'travel_to_8'
+];
+const HP_ICONS = [
+    { threshold: 0.15, key: 'mdam_almost_dead' },
+    { threshold: 0.3, key: 'mdam_severely_damaged' },
+    { threshold: 0.5, key: 'mdam_heavily_damaged' },
+    { threshold: 0.7, key: 'mdam_moderately_damaged' },
+    { threshold: 1.01, key: 'mdam_lightly_damaged' }
+];
+
 
 // ============================================================
 // INTERAÇÃO COM BLOCO/ENTIDADE
@@ -285,11 +311,25 @@ export function updateEntity(world, entity) {
         } else {
             updatePlayerControlled(world, entity);
         }
-    } else if (entity.isHostile) {
-        // Hostis precisam de movimento mesmo não sendo controláveis
-        updateHostileMovement(world, entity);
-    } else if (entity.isControllable) {
-        updateAIControlled(world, entity);
+    } else {
+        if (entity.alertTimer > 0) {
+            entity.alertTimer--;
+            if (entity.alertTimer <= 0) {
+                entity.alertTarget = null;
+            }
+        }
+        const player = world.getPlayerEntity();
+        if (world.mode === 'editor' && player && player.noClip) {
+            entity.targetEntity = null;
+            entity.target = null;
+            entity.path = [];
+            entity.canSeePlayer = false;
+        } else {
+            updateFactionAI(world, entity);
+            if (entity.isControllable || entity.isHostile) {
+                updateAIControlled(world, entity);
+            }
+        }
     }
     
     // Física Y para TODAS as entidades
@@ -591,6 +631,143 @@ export function updateAIControlled(world, entity) {
 }
 
 // ============================================================
+// IA DE FACÇÕES + STEALTH
+// ============================================================
+function getEyeHeight(entity) {
+    return (entity.isCrouching ? CONFIG.ENTITY_HEIGHT_CROUCHED : CONFIG.ENTITY_HEIGHT) * 0.8;
+}
+
+function hasLineOfSight(world, entity, target) {
+    const origin = new THREE.Vector3(entity.x, entity.y + getEyeHeight(entity), entity.z);
+    const targetHeight = (target.isCrouching ? CONFIG.ENTITY_HEIGHT_CROUCHED : CONFIG.ENTITY_HEIGHT) * 0.6;
+    const targetPos = new THREE.Vector3(target.x, target.y + targetHeight, target.z);
+    const rayDir = targetPos.clone().sub(origin);
+    const rayDist = rayDir.length();
+    if (rayDist <= 0.01) return true;
+    rayDir.normalize();
+
+    aiRaycaster.set(origin, rayDir);
+    aiRaycaster.far = rayDist - 0.05;
+    const occluders = world.blocks
+        .filter((block) => block.solid && block.mesh)
+        .map((block) => block.mesh);
+    const hits = aiRaycaster.intersectObjects(occluders, false);
+    return hits.length === 0;
+}
+
+function canSeeTarget(world, entity, target) {
+    if (!target) return false;
+    const dx = target.x - entity.x;
+    const dz = target.z - entity.z;
+    const distance = Math.sqrt(dx * dx + dz * dz);
+    if (distance > CONFIG.VISION_RANGE) return false;
+
+    if (!target.isCrouching && distance <= CONFIG.PROXIMITY_DETECT_RANGE) {
+        if (hasLineOfSight(world, entity, target)) return true;
+    }
+
+    const forward = new THREE.Vector3(-Math.sin(entity.yaw), 0, -Math.cos(entity.yaw)).normalize();
+    const dir = new THREE.Vector3(dx, 0, dz);
+    if (dir.lengthSq() > 0) dir.normalize();
+    const fovCos = Math.cos((CONFIG.VISION_FOV_DEG * Math.PI / 180) / 2);
+    if (forward.dot(dir) < fovCos) return false;
+
+    return hasLineOfSight(world, entity, target);
+}
+
+function findClosestProximityTarget(world, entity) {
+    let closest = null;
+    let closestDist = Infinity;
+    for (const other of world.entities) {
+        if (other === entity) continue;
+        if (other.type !== 'player' && other.type !== 'npc') continue;
+        if (other.isCrouching) continue;
+        const dx = other.x - entity.x;
+        const dz = other.z - entity.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist > CONFIG.PROXIMITY_DETECT_RANGE) continue;
+        if (!hasLineOfSight(world, entity, other)) continue;
+        if (dist < closestDist) {
+            closestDist = dist;
+            closest = other;
+        }
+    }
+    return closest;
+}
+
+function findClosestVisibleEnemy(world, entity) {
+    let closest = null;
+    let closestDist = Infinity;
+    for (const other of world.entities) {
+        if (other === entity) continue;
+        if (other.type === 'player' || other.type === 'npc') {
+            const relation = getFactionRelation(entity.faction, other.faction);
+            if (relation !== 'hostile') continue;
+            const dx = other.x - entity.x;
+            const dz = other.z - entity.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            const closeDetect = !other.isCrouching &&
+                dist <= CONFIG.HOSTILE_DETECTION_RANGE &&
+                hasLineOfSight(world, entity, other);
+            if (!closeDetect && !canSeeTarget(world, entity, other)) continue;
+            if (dist < closestDist) {
+                closestDist = dist;
+                closest = other;
+            }
+        }
+    }
+    return closest;
+}
+
+export function updateFactionAI(world, entity) {
+    if (!entity.isControllable && !entity.isHostile) return;
+
+    if (entity.shootCooldown > 0) {
+        entity.shootCooldown--;
+    }
+
+    const player = world.getPlayerEntity();
+    entity.canSeePlayer = player ? canSeeTarget(world, entity, player) : false;
+
+    const target = findClosestVisibleEnemy(world, entity);
+    if (!target) {
+        entity.targetEntity = null;
+        entity.target = null;
+        entity.path = [];
+        const proximityTarget = findClosestProximityTarget(world, entity);
+        if (proximityTarget) {
+            entity.alertTimer = 20;
+            entity.alertTarget = {
+                x: proximityTarget.x,
+                y: proximityTarget.y + CONFIG.ENTITY_HEIGHT * 0.5,
+                z: proximityTarget.z
+            };
+            const dx = proximityTarget.x - entity.x;
+            const dz = proximityTarget.z - entity.z;
+            entity.yaw = Math.atan2(-dx, -dz);
+        }
+        return;
+    }
+
+    entity.targetEntity = target;
+    entity.target = { x: target.x, y: target.y, z: target.z };
+
+    const dx = target.x - entity.x;
+    const dy = target.y - entity.y;
+    const dz = target.z - entity.z;
+    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    if (distance <= CONFIG.HOSTILE_ATTACK_RANGE && entity.shootCooldown === 0) {
+        shootProjectileFromEntity(world, entity, target);
+        entity.shootCooldown = CONFIG.HOSTILE_SHOOT_COOLDOWN;
+        entity.target = null;
+        entity.path = [];
+    }
+
+    entity.yaw = Math.atan2(-dx, -dz);
+}
+
+// ============================================================
 // IA HOSTIL
 // ============================================================
 export function updateHostileAI(world, entity) {
@@ -718,6 +895,8 @@ export function shootProjectileFromEntity(world, shooter, target) {
     }
     
     const damage = shooter.selectedBlockType.breakDamage;
+    const speed = shooter.selectedBlockType.bulletSpeed || 0.5;
+    const lifeTime = shooter.selectedBlockType.bulletLifetime || 100;
     
     const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
     const materials = createBlockMaterials(world, shooter.selectedBlockType);
@@ -739,14 +918,15 @@ export function shootProjectileFromEntity(world, shooter, target) {
     
     const projectile = {
         mesh: mesh,
-        velocity: direction.multiplyScalar(0.5),
+        velocity: direction.multiplyScalar(speed),
         damage: damage,
-        lifeTime: 100,
+        lifeTime: lifeTime,
         shooter: shooter // Guarda referência de quem atirou
     };
     
     world._internal.scene.add(mesh);
     world.projectiles.push(projectile);
+    alertEntitiesFromShot(world, shooter);
     
     console.log(`${shooter.name} atirou!`);
 }
@@ -803,6 +983,9 @@ export function updateEntityMesh(world, entity, isPlayerControlled) {
         if (entity.mesh && entity.mesh.visible) {
             entity.mesh.visible = false;
         }
+        if (entity.indicatorGroup && entity.indicatorGroup.visible) {
+            entity.indicatorGroup.visible = false;
+        }
     } else {
         if (!entity.mesh && entity.npcData) {
             const texture = world._internal.blockTextures[entity.npcData.texture];
@@ -832,8 +1015,8 @@ export function updateEntityMesh(world, entity, isPlayerControlled) {
                 : entity.npcData.height / 2;
             entity.mesh.position.set(entity.x, entity.y + meshHeight, entity.z);
             
-            // Hostis olham para o alvo, outros olham para a câmera
-            if (entity.isHostile && entity.targetEntity) {
+            // Olha para o alvo se tiver, senão olha para a câmera
+            if (entity.targetEntity) {
                 entity.mesh.lookAt(
                     new THREE.Vector3(
                         entity.targetEntity.x,
@@ -841,9 +1024,185 @@ export function updateEntityMesh(world, entity, isPlayerControlled) {
                         entity.targetEntity.z
                     )
                 );
+            } else if (entity.alertTarget) {
+                entity.mesh.lookAt(
+                    new THREE.Vector3(
+                        entity.alertTarget.x,
+                        entity.alertTarget.y,
+                        entity.alertTarget.z
+                    )
+                );
             } else {
                 entity.mesh.lookAt(world._internal.camera.position);
             }
+
+            if (entity.npcData) {
+                updateEntityIndicators(world, entity);
+            }
         }
     }
+}
+
+function createNameTagMesh(text) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const fontSize = 22;
+    const padding = 10;
+    ctx.font = `${fontSize}px "Courier New", monospace`;
+    const metrics = ctx.measureText(text);
+    const textWidth = Math.ceil(metrics.width);
+    canvas.width = Math.max(120, textWidth + padding * 2);
+    canvas.height = 40;
+    ctx.font = `${fontSize}px "Courier New", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.fillText(text, canvas.width / 2 + 2, canvas.height / 2 + 1);
+    ctx.fillStyle = 'white';
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true
+    });
+    const aspect = canvas.width / canvas.height;
+    const height = 0.28;
+    const width = height * aspect;
+    const geometry = new THREE.PlaneGeometry(width, height);
+    const mesh = new THREE.Mesh(geometry, material);
+    return { mesh, texture, width };
+}
+
+function ensureIndicatorMeshes(world, entity) {
+    if (entity.indicatorGroup) return;
+    const group = new THREE.Group();
+
+    const nameTag = createNameTagMesh(entity.name || 'Sem Nome');
+    const spriteSize = 0.32;
+    const bgSize = 0.45;
+    const spriteGeometry = new THREE.PlaneGeometry(spriteSize, spriteSize);
+    const bgGeometry = new THREE.PlaneGeometry(bgSize, bgSize);
+    const bgMaterial = new THREE.MeshBasicMaterial({
+        map: world._internal.blockTextures['disabled_base'],
+        transparent: true
+    });
+    const bgMesh = new THREE.Mesh(bgGeometry, bgMaterial);
+    const spriteMaterial = new THREE.MeshBasicMaterial({
+        map: world._internal.blockTextures[VISION_ICONS.friendly.unseen],
+        transparent: true
+    });
+    const spriteMesh = new THREE.Mesh(spriteGeometry, spriteMaterial);
+    const hpMaterial = new THREE.MeshBasicMaterial({
+        map: world._internal.blockTextures[HP_ICONS[HP_ICONS.length - 1].key],
+        transparent: true
+    });
+    const hpMesh = new THREE.Mesh(spriteGeometry, hpMaterial);
+    const dirMaterial = new THREE.MeshBasicMaterial({
+        map: world._internal.blockTextures[DIRECTION_ICONS[0]],
+        transparent: true
+    });
+    const dirMesh = new THREE.Mesh(spriteGeometry, dirMaterial);
+
+    const gap = 0.05;
+    const totalWidth = spriteSize + gap + nameTag.width;
+    bgMesh.position.x = -totalWidth / 2 + spriteSize / 2;
+    bgMesh.position.z = -0.001;
+    spriteMesh.position.x = -totalWidth / 2 + spriteSize / 2;
+    dirMesh.position.x = spriteMesh.position.x;
+    hpMesh.position.x = spriteMesh.position.x;
+    nameTag.mesh.position.x = -totalWidth / 2 + spriteSize + gap + nameTag.width / 2;
+
+    bgMesh.renderOrder = 0;
+    spriteMesh.renderOrder = 1;
+    dirMesh.renderOrder = 2;
+    hpMesh.renderOrder = 3;
+    group.add(bgMesh);
+    group.add(spriteMesh);
+    group.add(dirMesh);
+    group.add(hpMesh);
+    group.add(nameTag.mesh);
+
+    entity.indicatorGroup = group;
+    entity.statusBackgroundMesh = bgMesh;
+    entity.statusSpriteMesh = spriteMesh;
+    entity.hpSpriteMesh = hpMesh;
+    entity.directionSpriteMesh = dirMesh;
+    entity.nameTagMesh = nameTag.mesh;
+    entity.nameTagTexture = nameTag.texture;
+    world._internal.scene.add(group);
+}
+
+function getDirectionIconIndex(entity, player) {
+    if (!player) return 0;
+    const dx = player.x - entity.x;
+    const dz = player.z - entity.z;
+    if (dx === 0 && dz === 0) return 0;
+    const forward = new THREE.Vector3(-Math.sin(entity.yaw), 0, -Math.cos(entity.yaw)).normalize();
+    const right = new THREE.Vector3(Math.cos(entity.yaw), 0, -Math.sin(entity.yaw)).normalize();
+    const dir = new THREE.Vector3(dx, 0, dz).normalize();
+    let relative = Math.atan2(dir.dot(right), dir.dot(forward)) + Math.PI;
+    if (relative < 0) relative += Math.PI * 2;
+    if (relative >= Math.PI * 2) relative -= Math.PI * 2;
+    const sector = Math.floor((relative + Math.PI / 8) / (Math.PI / 4)) % 8;
+    return sector;
+}
+
+function updateEntityIndicators(world, entity) {
+    ensureIndicatorMeshes(world, entity);
+    if (entity.indicatorGroup && !entity.indicatorGroup.visible) {
+        entity.indicatorGroup.visible = true;
+    }
+    const camera = world._internal.camera;
+    const player = world.getPlayerEntity();
+    const relation = player ? getFactionRelation(entity.faction, player.faction) : 'hostile';
+    const relationKey = relation === 'friendly' ? 'friendly' : 'hostile';
+    const seenKey = entity.canSeePlayer ? 'seen' : 'unseen';
+    const iconKey = VISION_ICONS[relationKey][seenKey];
+    const texture = world._internal.blockTextures[iconKey];
+    if (texture && entity.statusSpriteMesh.material.map !== texture) {
+        entity.statusSpriteMesh.material.map = texture;
+        entity.statusSpriteMesh.material.needsUpdate = true;
+    }
+    const hpMax = entity.maxHP || 1;
+    const hp = typeof entity.hp === 'number' ? entity.hp : hpMax;
+    const ratio = Math.max(0, Math.min(1, hp / Math.max(1, hpMax)));
+    let hpKey = HP_ICONS[HP_ICONS.length - 1].key;
+    for (const entry of HP_ICONS) {
+        if (ratio <= entry.threshold) {
+            hpKey = entry.key;
+            break;
+        }
+    }
+    const hpTexture = world._internal.blockTextures[hpKey];
+    if (hpTexture && entity.hpSpriteMesh.material.map !== hpTexture) {
+        entity.hpSpriteMesh.material.map = hpTexture;
+        entity.hpSpriteMesh.material.needsUpdate = true;
+    }
+    const dirIndex = getDirectionIconIndex(entity, player);
+    const dirKey = DIRECTION_ICONS[dirIndex];
+    const dirTexture = world._internal.blockTextures[dirKey];
+    if (dirTexture && entity.directionSpriteMesh.material.map !== dirTexture) {
+        entity.directionSpriteMesh.material.map = dirTexture;
+        entity.directionSpriteMesh.material.needsUpdate = true;
+    }
+    const blockType = entity.selectedBlockType || null;
+    let bgKey = 'disabled_base';
+    if (blockType && blockType.textures) {
+        const count = entity.inventory ? (entity.inventory[blockType.id] || 0) : null;
+        if (count === null || count > 0) {
+            bgKey = blockType.textures.all || blockType.textures.top || bgKey;
+        }
+    }
+    const bgTexture = world._internal.blockTextures[bgKey];
+    if (bgTexture && entity.statusBackgroundMesh.material.map !== bgTexture) {
+        entity.statusBackgroundMesh.material.map = bgTexture;
+        entity.statusBackgroundMesh.material.needsUpdate = true;
+    }
+
+    const headHeight = entity.npcData ? entity.npcData.height : CONFIG.ENTITY_HEIGHT;
+    entity.indicatorGroup.position.set(entity.x, entity.y + headHeight + 0.35, entity.z);
+    entity.indicatorGroup.lookAt(camera.position);
 }

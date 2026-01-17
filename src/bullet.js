@@ -53,6 +53,8 @@ export function createProjectile(world) {
     ////updateInventoryDisplay(world);
     
     const damage = player.selectedBlockType.breakDamage;
+    const speed = player.selectedBlockType.bulletSpeed || 0.5;
+    const lifeTime = player.selectedBlockType.bulletLifetime || 100;
     
     const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
     const materials = createBlockMaterials(world, player.selectedBlockType);
@@ -65,14 +67,39 @@ export function createProjectile(world) {
     
     const projectile = {
         mesh: mesh,
-        velocity: direction.multiplyScalar(0.5),
+        velocity: direction.multiplyScalar(speed),
         damage: damage,
-        lifeTime: 100,
+        lifeTime: lifeTime,
         shooter: player
     };
     
     world._internal.scene.add(mesh);
     world.projectiles.push(projectile);
+    alertEntitiesFromShot(world, player);
+}
+
+export function alertEntitiesFromShot(world, shooter) {
+    if (!shooter) return;
+    if (world.mode === 'editor') {
+        const player = world.getPlayerEntity();
+        if (player && player.noClip) return;
+    }
+    const range = CONFIG.SHOT_DETECTION_RANGE || CONFIG.HOSTILE_DETECTION_RANGE * 2;
+    const origin = {
+        x: shooter.x,
+        y: shooter.y + CONFIG.ENTITY_HEIGHT * 0.5,
+        z: shooter.z
+    };
+    for (const entity of world.entities) {
+        if (entity === shooter) continue;
+        if (entity.type !== 'npc' && entity.type !== 'player') continue;
+        const dx = entity.x - origin.x;
+        const dz = entity.z - origin.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist > range) continue;
+        entity.alertTimer = 120;
+        entity.alertTarget = { x: origin.x, y: origin.y, z: origin.z };
+    }
 }
 
 export function placeBlock(world) {
@@ -157,6 +184,15 @@ export function updateProjectiles(world) {
             if (distance < 0.5) {
                 entity.hp -= proj.damage;
                 console.log(`${entity.name} levou ${proj.damage} de dano! HP: ${entity.hp}/${entity.maxHP}`);
+
+                if (proj.shooter && proj.shooter !== entity) {
+                    entity.alertTimer = 90;
+                    entity.alertTarget = {
+                        x: proj.shooter.x,
+                        y: proj.shooter.y + CONFIG.ENTITY_HEIGHT * 0.5,
+                        z: proj.shooter.z
+                    };
+                }
                 
                 // Feedback visual
                 if (entity.mesh && entity.mesh.material) {
