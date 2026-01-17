@@ -1,16 +1,4 @@
 export default {
-    COIN: {
-        id: 'coin',
-        name: 'Moeda',
-        placeable: false,
-        textureKey: 'gold',
-        isConsumable: false,
-        handlesInventory: true,
-        use: (world, entity, amount) => {
-            entity.itemInventory = entity.itemInventory || {};
-            entity.itemInventory.coin = (entity.itemInventory.coin || 0) + amount;
-        }
-    },
     MEDKIT: {
         id: 'medkit',
         name: 'Kit Medico',

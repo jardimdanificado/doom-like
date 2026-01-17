@@ -28,6 +28,8 @@ const HP_ICONS = [
 ];
 
 
+
+
 // ============================================================
 // INTERAÇÃO COM BLOCO/ENTIDADE
 // ============================================================
@@ -134,19 +136,26 @@ export function findPath(world, entity, targetPos) {
     
     const start = {
         x: Math.round(entity.x),
-        y: Math.round(entity.y),
+        y: Math.round(getGroundLevel(world, entity.x, entity.z)),
         z: Math.round(entity.z)
     };
     
+    const endX = Math.round(targetPos.x);
+    const endZ = Math.round(targetPos.z);
+    let endY = Math.round(targetPos.y);
+    if (!canWalkTo(world, entity, endX, endY, endZ, false) &&
+        !canWalkTo(world, entity, endX, endY, endZ, true)) {
+        endY = Math.round(getGroundLevel(world, targetPos.x, targetPos.z));
+    }
     const end = {
-        x: Math.round(targetPos.x),
-        y: Math.round(targetPos.y),
-        z: Math.round(targetPos.z)
+        x: endX,
+        y: endY,
+        z: endZ
     };
     
     // Se já está perto do alvo, não precisa calcular
-    const dist = Math.abs(start.x - end.x) + Math.abs(start.z - end.z);
-    if (dist < 2) return [];
+    const dist = Math.abs(start.x - end.x) + Math.abs(start.z - end.z) + Math.abs(start.y - end.y);
+    if (dist < 2 && Math.abs(start.y - end.y) < 0.5) return [];
     
     const openSet = [];
     const closedSet = new Set();
@@ -161,7 +170,8 @@ export function findPath(world, entity, targetPos) {
     
     let iterations = 0;
     
-    while (openSet.length > 0 && iterations < CONFIG.MAX_PATH_ITERATIONS) {
+    const maxIterations = CONFIG.MAX_PATH_ITERATIONS + dist * 20;
+    while (openSet.length > 0 && iterations < maxIterations) {
         iterations++;
         
         openSet.sort((a, b) => fScore.get(a) - fScore.get(b));
@@ -221,10 +231,23 @@ export function getNeighbors(world, entity, x, y, z) {
             neighbors.push({x: nx, y: y, z: nz, cost: 1.5, needsCrouch: true});
         }
         
-        // Pulo para cima (1 bloco) - apenas direções cardeais
+        // Pulo (até 1 de altura, até 1 na horizontal) - apenas direções cardeais
         if (Math.abs(dir.dx) + Math.abs(dir.dz) === 1) {
-            if (canJumpTo(world, entity, nx, y + 1, nz)) {
+            if (canJumpToFrom(world, entity, x, y, z, nx, y + 1, nz)) {
                 neighbors.push({x: nx, y: y + 1, z: nz, cost: 2, needsCrouch: false});
+            }
+            // Salto sobre buraco de 1 bloco (distância 2), mantendo limite de altura
+            const gapBlocked = !canWalkTo(world, entity, nx, y, nz, false) &&
+                !canWalkTo(world, entity, nx, y, nz, true);
+            if (gapBlocked) {
+                const jx = x + dir.dx * 2;
+                const jz = z + dir.dz * 2;
+                if (canWalkTo(world, entity, jx, y, jz, false)) {
+                    neighbors.push({x: jx, y: y, z: jz, cost: 2.6, needsCrouch: false});
+                }
+                if (canWalkTo(world, entity, jx, y + 1, jz, false)) {
+                    neighbors.push({x: jx, y: y + 1, z: jz, cost: 3.0, needsCrouch: false});
+                }
             }
         }
         
@@ -232,12 +255,22 @@ export function getNeighbors(world, entity, x, y, z) {
         const groundLevel = getGroundLevel(world, nx, nz);
         if (groundLevel < y && groundLevel >= y - 3) {
             if (canWalkTo(world, entity, nx, groundLevel, nz, false)) {
-                neighbors.push({x: nx, y: groundLevel, z: nz, cost: 1.2, needsCrouch: false});
+                const drop = y - groundLevel;
+                const penalty = drop * 2;
+                neighbors.push({x: nx, y: groundLevel, z: nz, cost: 1.2 + penalty, needsCrouch: false});
             }
         }
     }
     
     return neighbors;
+}
+
+function getWeaponRange(entity) {
+    const blockType = entity.selectedBlockType;
+    if (!blockType) return CONFIG.HOSTILE_ATTACK_RANGE;
+    const speed = blockType.bulletSpeed || 0.5;
+    const life = blockType.bulletLifetime || 100;
+    return speed * life;
 }
 
 export function canWalkTo(world, entity, x, y, z, crouching) {
@@ -253,18 +286,22 @@ export function canWalkTo(world, entity, x, y, z, crouching) {
 }
 
 export function canJumpTo(world, entity, x, y, z) {
+    return canJumpToFrom(world, entity, entity.x, entity.y, entity.z, x, y, z);
+}
+
+export function canJumpToFrom(world, entity, startX, startY, startZ, x, y, z) {
     // Verifica se pode pousar
     if (!canWalkTo(world, entity, x, y, z, false)) return false;
     
     // Verifica altura do pulo
-    const startGround = getGroundLevel(world, entity.x, entity.z);
+    const startGround = getGroundLevel(world, startX, startZ);
     const endGround = getGroundLevel(world, x, z);
     
     if (endGround - startGround > CONFIG.MAX_JUMP_HEIGHT) return false;
     
     // Verifica distância
-    const dx = x - entity.x;
-    const dz = z - entity.z;
+    const dx = x - startX;
+    const dz = z - startZ;
     const distance = Math.sqrt(dx * dx + dz * dz);
     
     if (distance > CONFIG.MAX_JUMP_DISTANCE) return false;
@@ -292,13 +329,26 @@ export function reconstructPath(cameFrom, current) {
 export function updateEntity(world, entity) {
     const isPlayerControlled = (world.getPlayerEntity() === entity);
     const noClip = !!entity.noClip;
-    const center = world._internal.mapCenter || { x: 0, z: 0 };
-    const dx = entity.x - center.x;
-    const dz = entity.z - center.z;
-    const radius = Math.sqrt(dx * dx + dz * dz);
-    if (radius > CONFIG.WORLD_MAX_RADIUS || entity.y < CONFIG.WORLD_MIN_Y) {
-        world.removeEntity(entity);
-        return;
+    const bounds = world._internal.mapBounds;
+    if (bounds) {
+        const margin = CONFIG.WORLD_MAX_RADIUS;
+        if (entity.x < bounds.minX - margin ||
+            entity.x > bounds.maxX + margin ||
+            entity.z < bounds.minZ - margin ||
+            entity.z > bounds.maxZ + margin ||
+            entity.y < CONFIG.WORLD_MIN_Y) {
+            world.removeEntity(entity);
+            return;
+        }
+    } else {
+        const center = world._internal.mapCenter || { x: 0, z: 0 };
+        const dx = entity.x - center.x;
+        const dz = entity.z - center.z;
+        const radius = Math.sqrt(dx * dx + dz * dz);
+        if (radius > CONFIG.WORLD_MAX_RADIUS || entity.y < CONFIG.WORLD_MIN_Y) {
+            world.removeEntity(entity);
+            return;
+        }
     }
     
     // GRAVIDADE para TODAS as entidades (controláveis e hostis)
@@ -319,15 +369,20 @@ export function updateEntity(world, entity) {
             }
         }
         const player = world.getPlayerEntity();
-        if (world.mode === 'editor' && player && player.noClip) {
-            entity.targetEntity = null;
-            entity.target = null;
-            entity.path = [];
-            entity.canSeePlayer = false;
+        if (world.mode === 'editor') {
+            if (player && player.noClip && !entity.editorMoveActive) {
+                entity.targetEntity = null;
+                entity.target = null;
+                entity.path = [];
+                entity.canSeePlayer = false;
+            }
         } else {
             updateFactionAI(world, entity);
             if (entity.isControllable || entity.isHostile) {
                 updateAIControlled(world, entity);
+            }
+            if (entity.editorMoveActive && !entity.target && entity.path.length === 0) {
+                entity.editorMoveActive = false;
             }
         }
     }
@@ -624,11 +679,17 @@ export function updateAIControlled(world, entity) {
     }
     
     // Pulo se necessário
-    if (target.y > entity.y && entity.onGround) {
-        entity.velocityY = CONFIG.JUMP_FORCE;
-        entity.onGround = false;
+    if (entity.onGround) {
+        if (target.y > entity.y) {
+            entity.velocityY = CONFIG.JUMP_FORCE;
+            entity.onGround = false;
+        } else if (distance > 1.1 && target.y >= entity.y - 0.2) {
+            entity.velocityY = CONFIG.JUMP_FORCE;
+            entity.onGround = false;
+        }
     }
 }
+
 
 // ============================================================
 // IA DE FACÇÕES + STEALTH
@@ -722,6 +783,10 @@ function findClosestVisibleEnemy(world, entity) {
 export function updateFactionAI(world, entity) {
     if (!entity.isControllable && !entity.isHostile) return;
 
+    if (entity.editorMoveActive) {
+        return;
+    }
+
     if (entity.shootCooldown > 0) {
         entity.shootCooldown--;
     }
@@ -750,18 +815,21 @@ export function updateFactionAI(world, entity) {
     }
 
     entity.targetEntity = target;
-    entity.target = { x: target.x, y: target.y, z: target.z };
 
     const dx = target.x - entity.x;
     const dy = target.y - entity.y;
     const dz = target.z - entity.z;
     const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const weaponRange = getWeaponRange(entity);
+    const desiredRange = weaponRange > 0 ? weaponRange * 0.85 : CONFIG.HOSTILE_ATTACK_RANGE;
 
-    if (distance <= CONFIG.HOSTILE_ATTACK_RANGE && entity.shootCooldown === 0) {
+    if (distance <= desiredRange && entity.shootCooldown === 0) {
         shootProjectileFromEntity(world, entity, target);
         entity.shootCooldown = CONFIG.HOSTILE_SHOOT_COOLDOWN;
         entity.target = null;
         entity.path = [];
+    } else if (distance > desiredRange) {
+        entity.target = { x: target.x, y: target.y, z: target.z };
     }
 
     entity.yaw = Math.atan2(-dx, -dz);
@@ -877,9 +945,14 @@ export function updateHostileMovement(world, entity) {
     }
     
     // Pulo se necessário
-    if (target.y > entity.y && entity.onGround) {
-        entity.velocityY = CONFIG.JUMP_FORCE;
-        entity.onGround = false;
+    if (entity.onGround) {
+        if (target.y > entity.y) {
+            entity.velocityY = CONFIG.JUMP_FORCE;
+            entity.onGround = false;
+        } else if (distance > 1.1 && target.y >= entity.y - 0.2) {
+            entity.velocityY = CONFIG.JUMP_FORCE;
+            entity.onGround = false;
+        }
     }
 }
 
@@ -969,12 +1042,23 @@ export function applyPhysics(world, entity) {
             entity.y = yCollision.block.y + CONFIG.BLOCK_SIZE / 2;
             entity.velocityY = 0;
             entity.onGround = true;
+            if (entity.fallStartY !== null) {
+                const fallDistance = entity.fallStartY - entity.y;
+                if (fallDistance > CONFIG.FALL_DAMAGE_THRESHOLD) {
+                    const damage = Math.floor((fallDistance - CONFIG.FALL_DAMAGE_THRESHOLD) * CONFIG.FALL_DAMAGE_MULTIPLIER);
+                    entity.hp = Math.max(0, entity.hp - damage);
+                }
+                entity.fallStartY = null;
+            }
         } else {
             entity.velocityY = 0;
         }
     } else {
         entity.y = newY;
         entity.onGround = false;
+        if (entity.fallStartY === null) {
+            entity.fallStartY = entity.y;
+        }
     }
 }
 
@@ -1038,6 +1122,12 @@ export function updateEntityMesh(world, entity, isPlayerControlled) {
 
             if (entity.npcData) {
                 updateEntityIndicators(world, entity);
+            }
+            if (world.mode === 'editor' && entity.type === 'npc') {
+                updateDebugArrow(world, entity);
+            } else {
+                if (entity.debugArrow) entity.debugArrow.visible = false;
+                if (entity.debugPathLine) entity.debugPathLine.visible = false;
             }
         }
     }
@@ -1143,7 +1233,7 @@ function getDirectionIconIndex(entity, player) {
     const forward = new THREE.Vector3(-Math.sin(entity.yaw), 0, -Math.cos(entity.yaw)).normalize();
     const right = new THREE.Vector3(Math.cos(entity.yaw), 0, -Math.sin(entity.yaw)).normalize();
     const dir = new THREE.Vector3(dx, 0, dz).normalize();
-    let relative = Math.atan2(dir.dot(right), dir.dot(forward)) + Math.PI;
+    let relative = Math.atan2(-dir.dot(right), dir.dot(forward)) + Math.PI;
     if (relative < 0) relative += Math.PI * 2;
     if (relative >= Math.PI * 2) relative -= Math.PI * 2;
     const sector = Math.floor((relative + Math.PI / 8) / (Math.PI / 4)) % 8;
@@ -1154,6 +1244,10 @@ function updateEntityIndicators(world, entity) {
     ensureIndicatorMeshes(world, entity);
     if (entity.indicatorGroup && !entity.indicatorGroup.visible) {
         entity.indicatorGroup.visible = true;
+    }
+    if (entity.isSpeaking) {
+        entity.indicatorGroup.visible = false;
+        return;
     }
     const camera = world._internal.camera;
     const player = world.getPlayerEntity();
@@ -1205,4 +1299,63 @@ function updateEntityIndicators(world, entity) {
     const headHeight = entity.npcData ? entity.npcData.height : CONFIG.ENTITY_HEIGHT;
     entity.indicatorGroup.position.set(entity.x, entity.y + headHeight + 0.35, entity.z);
     entity.indicatorGroup.lookAt(camera.position);
+}
+
+export function refreshEntityIndicators(world, entity) {
+    if (!entity || !entity.indicatorGroup) return;
+    world._internal.scene.remove(entity.indicatorGroup);
+    if (entity.nameTagTexture) {
+        entity.nameTagTexture.dispose();
+    }
+    if (entity.nameTagMesh && entity.nameTagMesh.material) {
+        entity.nameTagMesh.material.dispose();
+    }
+    if (entity.nameTagMesh && entity.nameTagMesh.geometry) {
+        entity.nameTagMesh.geometry.dispose();
+    }
+    if (entity.statusBackgroundMesh && entity.statusBackgroundMesh.material) {
+        entity.statusBackgroundMesh.material.dispose();
+    }
+    if (entity.statusBackgroundMesh && entity.statusBackgroundMesh.geometry) {
+        entity.statusBackgroundMesh.geometry.dispose();
+    }
+    if (entity.statusSpriteMesh && entity.statusSpriteMesh.material) {
+        entity.statusSpriteMesh.material.dispose();
+    }
+    if (entity.statusSpriteMesh && entity.statusSpriteMesh.geometry) {
+        entity.statusSpriteMesh.geometry.dispose();
+    }
+    if (entity.hpSpriteMesh && entity.hpSpriteMesh.material) {
+        entity.hpSpriteMesh.material.dispose();
+    }
+    if (entity.hpSpriteMesh && entity.hpSpriteMesh.geometry) {
+        entity.hpSpriteMesh.geometry.dispose();
+    }
+    if (entity.directionSpriteMesh && entity.directionSpriteMesh.material) {
+        entity.directionSpriteMesh.material.dispose();
+    }
+    if (entity.directionSpriteMesh && entity.directionSpriteMesh.geometry) {
+        entity.directionSpriteMesh.geometry.dispose();
+    }
+    entity.indicatorGroup = null;
+    entity.statusBackgroundMesh = null;
+    entity.statusSpriteMesh = null;
+    entity.hpSpriteMesh = null;
+    entity.directionSpriteMesh = null;
+    entity.nameTagMesh = null;
+    entity.nameTagTexture = null;
+}
+
+function updateDebugArrow(world, entity) {
+    if (!entity.debugArrow) {
+        const dir = new THREE.Vector3(0, 0, -1);
+        const origin = new THREE.Vector3(entity.x, entity.y, entity.z);
+        entity.debugArrow = new THREE.ArrowHelper(dir, origin, 0.7, 0xffd54a, 0.2, 0.12);
+        world._internal.scene.add(entity.debugArrow);
+    }
+    const headHeight = entity.npcData ? entity.npcData.height : CONFIG.ENTITY_HEIGHT;
+    const dir = new THREE.Vector3(-Math.sin(entity.yaw), 0, -Math.cos(entity.yaw)).normalize();
+    entity.debugArrow.setDirection(dir);
+    entity.debugArrow.position.set(entity.x, entity.y + headHeight + 0.6, entity.z);
+    entity.debugArrow.visible = true;
 }

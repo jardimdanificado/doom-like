@@ -5,8 +5,8 @@ export default {
         solid: true,
         maxHP: 100,
         breakDamage: 20,
-        bulletSpeed: 0.6,
-        bulletLifetime: 140,
+        bulletSpeed: 0.45,
+        bulletLifetime: 70,
         isFloor: false,
         textures: {
             all: 'stone'
@@ -18,8 +18,8 @@ export default {
         solid: true,
         maxHP: 50,
         breakDamage: 30,
-        bulletSpeed: 0.45,
-        bulletLifetime: 90,
+        bulletSpeed: 0.35,
+        bulletLifetime: 50,
         isFloor: false,
         textures: {
             top: 'grass',
@@ -33,8 +33,8 @@ export default {
         solid: true,
         maxHP: 75,
         breakDamage: 25,
-        bulletSpeed: 0.5,
-        bulletLifetime: 110,
+        bulletSpeed: 0.4,
+        bulletLifetime: 60,
         isFloor: false,
         textures: {
             all: 'wood'
@@ -46,8 +46,8 @@ export default {
         solid: true,
         maxHP: 150,
         breakDamage: 40,
-        bulletSpeed: 0.4,
-        bulletLifetime: 160,
+        bulletSpeed: 0.35,
+        bulletLifetime: 80,
         isFloor: false,
         textures: {
             all: 'gold'
@@ -71,8 +71,8 @@ export default {
         solid: true,
         maxHP: 60,
         breakDamage: 22,
-        bulletSpeed: 0.35,
-        bulletLifetime: 80,
+        bulletSpeed: 0.3,
+        bulletLifetime: 40,
         isFloor: false,
         textures: {
             all: 'door'
@@ -128,8 +128,8 @@ export default {
         solid: true,
         maxHP: 40,
         breakDamage: 35,
-        bulletSpeed: 0.55,
-        bulletLifetime: 100,
+        bulletSpeed: 0.4,
+        bulletLifetime: 60,
         isFloor: false,
         textures: {
             all: 'sand'
@@ -141,8 +141,8 @@ export default {
         solid: false,
         maxHP: 99999999,
         breakDamage: 0,
-        bulletSpeed: 0.5,
-        bulletLifetime: 100,
+        bulletSpeed: 0.4,
+        bulletLifetime: 60,
         isFloor: false,
         render: 'cross',
         editorOnly: true,
@@ -156,13 +156,14 @@ export default {
         solid: false,
         maxHP: 10,
         breakDamage: 1,
-        bulletSpeed: 0.4,
-        bulletLifetime: 70,
+        bulletSpeed: 0.3,
+        bulletLifetime: 50,
         isFloor: false,
         render: 'cross',
         textures: {
             all: 'grass'
         }
     },
+    
     
 };

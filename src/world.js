@@ -24,7 +24,29 @@ export default {
         texturesLoaded: false,
         keys: {},
         mapCenter: { x: 0, z: 0 },
-        usedNames: new Set()
+        usedNames: new Set(),
+        integrated: false,
+        editorMoveCommand: null,
+        editorMoveLine: null,
+        mapBounds: null
+    },
+
+    recalculateMapBounds() {
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minZ = Infinity;
+        let maxZ = -Infinity;
+        for (const block of this.blocks) {
+            if (block.x < minX) minX = block.x;
+            if (block.x > maxX) maxX = block.x;
+            if (block.z < minZ) minZ = block.z;
+            if (block.z > maxZ) maxZ = block.z;
+        }
+        if (minX !== Infinity) {
+            this._internal.mapBounds = { minX, maxX, minZ, maxZ };
+        } else {
+            this._internal.mapBounds = null;
+        }
     },
     
     getPlayerEntity() {
@@ -75,6 +97,7 @@ export default {
         
         this._internal.scene.add(mesh);
         this.blocks.push(block);
+        this.recalculateMapBounds();
         
         return block;
     },
@@ -86,6 +109,7 @@ export default {
                 this._internal.scene.remove(block.mesh);
             }
             this.blocks.splice(index, 1);
+            this.recalculateMapBounds();
         }
     },
 
@@ -94,6 +118,7 @@ export default {
             this._internal.scene.remove(block.mesh);
         }
         this.blocks = [];
+        this._internal.mapBounds = null;
     },
     
     isPositionOccupied(x, y, z) {
@@ -190,6 +215,8 @@ export default {
             npcTypeId: entityData.npcTypeId || null,
             faction: entityData.faction || 'neutral',
             canSeePlayer: false,
+            isSpeaking: false,
+            fallStartY: null,
             
             // Sistema de pathfinding
             target: entityData.target || null,
@@ -203,7 +230,8 @@ export default {
             targetEntity: null,
             blockInteractCooldown: 0,
             alertTimer: 0,
-            alertTarget: null
+            alertTarget: null,
+            editorMoveActive: false
         };
         
         this.entities.push(entity);
@@ -252,13 +280,40 @@ export default {
                     entity.directionSpriteMesh.geometry.dispose();
                 }
             }
+            if (entity.debugArrow) {
+                this._internal.scene.remove(entity.debugArrow);
+                if (entity.debugArrow.line && entity.debugArrow.line.material) {
+                    entity.debugArrow.line.material.dispose();
+                }
+                if (entity.debugArrow.line && entity.debugArrow.line.geometry) {
+                    entity.debugArrow.line.geometry.dispose();
+                }
+                if (entity.debugArrow.cone && entity.debugArrow.cone.material) {
+                    entity.debugArrow.cone.material.dispose();
+                }
+                if (entity.debugArrow.cone && entity.debugArrow.cone.geometry) {
+                    entity.debugArrow.cone.geometry.dispose();
+                }
+            }
+            if (entity.debugPathLine) {
+                this._internal.scene.remove(entity.debugPathLine);
+                if (entity.debugPathLine.material) {
+                    entity.debugPathLine.material.dispose();
+                }
+                if (entity.debugPathLine.geometry) {
+                    entity.debugPathLine.geometry.dispose();
+                }
+            }
+            if (this._internal.editorMoveCommand && this._internal.editorMoveCommand.entityId === entity.id) {
+                this._internal.editorMoveCommand = null;
+                if (this._internal.editorMoveLine) {
+                    this._internal.editorMoveLine.visible = false;
+                }
+            }
             this.entities.splice(index, 1);
             
             if (this.playerEntityIndex > index) {
                 this.playerEntityIndex--;
-            } else if (this.playerEntityIndex === index) {
-                this.playerEntityIndex = 0;
-                console.log(`Voltando controle para: ${this.entities[0].name}`);
             }
         }
     }

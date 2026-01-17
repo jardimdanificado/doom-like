@@ -9,7 +9,7 @@ import texturesToLoad from "../data/config/textures.js"
 import { vocabulario } from "../lib/vocabulario.js"
 import { FACTIONS, FACTION_ORDER } from "../data/config/factions.js"
 import world from "./world.js"
-import { updateEntity, checkInteractionTarget } from "./entity.js"
+import { updateEntity, checkInteractionTarget, refreshEntityIndicators } from "./entity.js"
 import { handleInteraction } from './entity.js';
 import { createProjectile, placeBlock } from './bullet.js';
 import { updateProjectiles } from './bullet.js';
@@ -17,6 +17,7 @@ import { updateItems, spawnBlockDrop, spawnItemDrop } from './item.js';
 import { useItem } from './item.js';
 import { spawnMessage, updateMessages } from './message.js';
 import audioSystem from './audio.js';
+import { getGroundLevel } from './collision.js';
 
 // ============================================================
 // INICIALIZAÇÃO
@@ -90,10 +91,13 @@ async function init() {
     world._internal.scene = scene;
     world._internal.camera = camera;
     world._internal.renderer = renderer;
-    world.mode = getModeFromLocation();
+    const bootMode = getModeFromLocation();
+    world._internal.integrated = bootMode === 'integrated';
+    world.mode = bootMode === 'integrated' ? 'shooter' : bootMode;
     document.body.dataset.mode = world.mode;
     ensureItemLabel();
     ensureHud();
+    
     setupMobileControls(world);
     
     await initAudio();
@@ -105,9 +109,17 @@ async function init() {
     document.addEventListener('keyup', (e) => world._internal.keys[e.code] = false);
     document.addEventListener('wheel', (e) => onWheel(world, e), { passive: false });
     
-    document.addEventListener('click', () => {
-        document.body.requestPointerLock();
-    });
+    document.addEventListener('click', (event) => {
+        const menu = document.getElementById('editor-context-menu');
+        if (menu && menu.style.display === 'block') return;
+    const panel = document.getElementById('entity-editor-panel');
+    if (panel && panel.style.display === 'block') return;
+    const blockPanel = document.getElementById('block-editor-panel');
+    if (blockPanel && blockPanel.style.display === 'block') return;
+    const worldPanel = document.getElementById('world-editor-panel');
+    if (worldPanel && worldPanel.style.display === 'block') return;
+    document.body.requestPointerLock();
+});
     
     document.addEventListener('mousemove', (e) => onMouseMove(world, e));
     document.addEventListener('mousedown', (e) => onMouseDown(world, e));
@@ -271,6 +283,7 @@ function createNpcEntity(world, npcType, position, nameOverride = null, factionO
                 audioSystem.stopEvent(entity.audioInstance, true);
                 entity.audioInstance = null;
             }
+            entity.isSpeaking = true;
 
             audioSystem.playEvent('event:/teste', {}, { autoStart: true }).then((instance) => {
                 if (!instance) return;
@@ -292,6 +305,7 @@ function createNpcEntity(world, npcType, position, nameOverride = null, factionO
                     audioSystem.stopEvent(entity.audioInstance, true);
                     entity.audioInstance = null;
                 }
+                entity.isSpeaking = false;
             }, 2400);
         }
     });
@@ -346,12 +360,45 @@ function ensureHud() {
 }
 
 function getModeFromLocation() {
-    if (window.__MODE__ === 'editor' || window.__MODE__ === 'shooter') {
+    if (window.__MODE__ === 'editor' || window.__MODE__ === 'shooter' || window.__MODE__ === 'integrated') {
         return window.__MODE__;
     }
     const params = new URLSearchParams(window.location.search);
     return params.get('mode') === 'editor' ? 'editor' : 'shooter';
 }
+
+function setWorldMode(world, mode) {
+    if (mode !== 'editor' && mode !== 'shooter') return;
+    world.mode = mode;
+    document.body.dataset.mode = world.mode;
+    const player = world.getPlayerEntity();
+    if (player) {
+        player.isEditor = mode === 'editor';
+        if (mode === 'editor') {
+            if (!player._savedInventory) {
+                player._savedInventory = player.inventory ? { ...player.inventory } : null;
+                player._savedItemInventory = player.itemInventory ? { ...player.itemInventory } : null;
+            }
+            const editorInventory = {};
+            Object.values(BLOCK_TYPES).forEach((blockType) => {
+                editorInventory[blockType.id] = 999;
+            });
+            player.inventory = editorInventory;
+            player.noClip = true;
+        } else {
+            if (player._savedInventory) {
+                player.inventory = { ...player._savedInventory };
+            }
+            if (player._savedItemInventory) {
+                player.itemInventory = { ...player._savedItemInventory };
+            }
+            player.noClip = false;
+        }
+    }
+    updateCurrentItemLabel(world);
+    updateHud(world);
+}
+
 
 function removeTargetBlock(world) {
     const camera = world._internal.camera;
@@ -419,6 +466,471 @@ function matchesMesh(object, mesh) {
         current = current.parent;
     }
     return false;
+}
+
+function getTargetUnderCrosshair(world) {
+    const camera = world._internal.camera;
+    const raycaster = world._internal.raycaster;
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const entityMeshes = world.entities.filter((e) => e.mesh).map((e) => e.mesh);
+    const blockMeshes = world.blocks.map((b) => b.mesh);
+    const allMeshes = [...entityMeshes, ...blockMeshes];
+    const intersects = raycaster.intersectObjects(allMeshes, true);
+    if (intersects.length === 0) return null;
+    const hitMesh = intersects[0].object;
+    const entity = world.entities.find((e) => matchesMesh(hitMesh, e.mesh));
+    if (entity) return { kind: 'entity', entity };
+    const block = world.blocks.find((b) => matchesMesh(hitMesh, b.mesh));
+    if (block) return { kind: 'block', block };
+    return null;
+}
+
+function ensureEditorContextMenu() {
+    let menu = document.getElementById('editor-context-menu');
+    if (menu) return menu;
+    menu = document.createElement('div');
+    menu.id = 'editor-context-menu';
+    menu.style.position = 'fixed';
+    menu.style.minWidth = '180px';
+    menu.style.background = 'rgba(0,0,0,0.85)';
+    menu.style.border = '1px solid rgba(255,255,255,0.25)';
+    menu.style.boxShadow = '0 6px 16px rgba(0,0,0,0.45)';
+    menu.style.color = 'white';
+    menu.style.fontFamily = '"Courier New", monospace';
+    menu.style.fontSize = '12px';
+    menu.style.padding = '6px';
+    menu.style.zIndex = '40';
+    menu.style.display = 'none';
+    document.body.appendChild(menu);
+    document.addEventListener('click', (e) => {
+        if (!menu.contains(e.target)) {
+            menu.style.display = 'none';
+        }
+    });
+    return menu;
+}
+
+function addMenuItem(menu, label, onClick) {
+    const item = document.createElement('button');
+    item.textContent = label;
+    item.style.width = '100%';
+    item.style.padding = '6px 8px';
+    item.style.margin = '4px 0';
+    item.style.textAlign = 'left';
+    item.style.background = 'rgba(255,255,255,0.08)';
+    item.style.color = 'white';
+    item.style.border = '1px solid rgba(255,255,255,0.12)';
+    item.style.cursor = 'pointer';
+    item.onclick = () => {
+        onClick();
+        menu.style.display = 'none';
+    };
+    menu.appendChild(item);
+}
+
+function editEntityFromPrompt(entity) {
+    const snapshot = {
+        name: entity.name,
+        faction: entity.faction,
+        hp: entity.hp,
+        maxHP: entity.maxHP,
+        isHostile: entity.isHostile,
+        isControllable: entity.isControllable,
+        isInteractable: entity.isInteractable,
+        selectedBlockTypeId: entity.selectedBlockType ? entity.selectedBlockType.id : null,
+        inventory: entity.inventory || {},
+        itemInventory: entity.itemInventory || {}
+    };
+    const panel = ensureCodeEditorPanel('entity-editor-panel');
+    const textarea = panel.querySelector('#entity-editor-panel-textarea');
+    const saveBtn = panel.querySelector('#entity-editor-panel-save');
+    textarea.value = JSON.stringify(snapshot, null, 2);
+    panel.style.display = 'block';
+    if (document.pointerLockElement === document.body) {
+        document.exitPointerLock();
+    }
+    saveBtn.onclick = () => {
+        const text = textarea.value;
+        if (!text) return;
+        try {
+            const data = JSON.parse(text);
+        const oldName = entity.name;
+        if (typeof data.name === 'string') entity.name = data.name;
+        if (typeof data.faction === 'string') entity.faction = data.faction;
+        if (typeof data.hp === 'number') entity.hp = data.hp;
+        if (typeof data.maxHP === 'number') entity.maxHP = data.maxHP;
+        if (typeof data.isHostile === 'boolean') entity.isHostile = data.isHostile;
+        if (typeof data.isControllable === 'boolean') entity.isControllable = data.isControllable;
+        if (typeof data.isInteractable === 'boolean') entity.isInteractable = data.isInteractable;
+        if (typeof data.selectedBlockTypeId === 'number') {
+            const blockType = Object.values(BLOCK_TYPES).find((b) => b.id === data.selectedBlockTypeId);
+            if (blockType) entity.selectedBlockType = blockType;
+        }
+        if (data.inventory && typeof data.inventory === 'object') entity.inventory = data.inventory;
+        if (data.itemInventory && typeof data.itemInventory === 'object') entity.itemInventory = data.itemInventory;
+        refreshEntityIndicators(world, entity);
+        panel.style.display = 'none';
+        } catch (err) {
+            console.warn('JSON invalido:', err);
+        }
+    };
+}
+
+function openEditorContextMenu(world, event) {
+    if (world.mode !== 'editor') return;
+    const menu = ensureEditorContextMenu();
+    menu.innerHTML = '';
+    const target = getTargetUnderCrosshair(world);
+    if (target && target.kind === 'entity') {
+        const entity = target.entity;
+        addMenuItem(menu, 'Controlar unidade', () => {
+            const index = world.entities.indexOf(entity);
+            if (index >= 0) {
+                world.switchPlayerControl(index);
+                updateCurrentItemLabel(world);
+            }
+        });
+        addMenuItem(menu, 'Editar objeto JS', () => editEntityFromPrompt(entity));
+        if (entity.type === 'npc') {
+            addMenuItem(menu, 'Venha ate aqui', () => {
+                startEditorMoveCommand(world, entity);
+            });
+            addMenuItem(menu, 'Olhe pra mim', () => {
+                const player = world.getPlayerEntity();
+                if (!player) return;
+                const dx = player.x - entity.x;
+                const dz = player.z - entity.z;
+                entity.yaw = Math.atan2(-dx, -dz);
+            });
+            addMenuItem(menu, 'Log no console', () => console.log('NPC:', entity));
+        } else {
+            addMenuItem(menu, 'Log no console', () => console.log('Entity:', entity));
+        }
+    } else if (target && target.kind === 'block') {
+        addMenuItem(menu, 'Editar bloco (JSON)', () => editBlockFromPanel(world, target.block.type));
+        addMenuItem(menu, 'Criar bloco a partir deste', () => cloneBlockTypeFrom(world, target.block.type));
+        addMenuItem(menu, 'Editar world (JSON)', () => editWorldFromPanel(world));
+    } else {
+        addMenuItem(menu, 'Fechar', () => {});
+    }
+    const x = Number.isFinite(event.clientX) ? event.clientX : window.innerWidth / 2;
+    const y = Number.isFinite(event.clientY) ? event.clientY : window.innerHeight / 2;
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    menu.style.display = 'block';
+}
+
+function ensureCodeEditorPanel(id) {
+    let panel = document.getElementById(id);
+    if (panel) return panel;
+    panel = document.createElement('div');
+    panel.id = id;
+    panel.style.position = 'fixed';
+    panel.style.inset = '40px';
+    panel.style.background = 'rgba(0,0,0,0.88)';
+    panel.style.border = '1px solid rgba(255,255,255,0.2)';
+    panel.style.zIndex = '50';
+    panel.style.display = 'none';
+    panel.style.padding = '12px';
+    panel.style.color = 'white';
+    panel.style.fontFamily = '"Courier New", monospace';
+    panel.style.fontSize = '12px';
+    panel.style.boxShadow = '0 10px 24px rgba(0,0,0,0.45)';
+
+    const textarea = document.createElement('textarea');
+    textarea.id = `${id}-textarea`;
+    textarea.style.width = '100%';
+    textarea.style.height = 'calc(100% - 48px)';
+    textarea.style.background = 'rgba(10,10,10,0.9)';
+    textarea.style.color = 'white';
+    textarea.style.border = '1px solid rgba(255,255,255,0.25)';
+    textarea.style.padding = '8px';
+    textarea.style.fontFamily = '"Courier New", monospace';
+    textarea.style.fontSize = '12px';
+    textarea.style.resize = 'none';
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.justifyContent = 'flex-end';
+    actions.style.gap = '8px';
+    actions.style.marginTop = '8px';
+
+    const makeBtn = (label) => {
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        btn.style.padding = '6px 10px';
+        btn.style.fontFamily = '"Courier New", monospace';
+        btn.style.fontSize = '12px';
+        btn.style.background = 'rgba(255,255,255,0.1)';
+        btn.style.color = 'white';
+        btn.style.border = '1px solid rgba(255,255,255,0.2)';
+        btn.style.cursor = 'pointer';
+        return btn;
+    };
+
+    const cancelBtn = makeBtn('Cancelar');
+    cancelBtn.onclick = () => {
+        panel.style.display = 'none';
+    };
+    const saveBtn = makeBtn('Salvar');
+    saveBtn.id = `${id}-save`;
+    actions.appendChild(cancelBtn);
+    actions.appendChild(saveBtn);
+
+    panel.appendChild(textarea);
+    panel.appendChild(actions);
+    document.body.appendChild(panel);
+    return panel;
+}
+
+function editBlockFromPanel(world, blockType) {
+    if (!blockType) return;
+    const snapshot = {
+        id: blockType.id,
+        name: blockType.name,
+        solid: blockType.solid,
+        maxHP: blockType.maxHP,
+        breakDamage: blockType.breakDamage,
+        bulletSpeed: blockType.bulletSpeed,
+        bulletLifetime: blockType.bulletLifetime,
+        isFloor: blockType.isFloor,
+        render: blockType.render || null,
+        editorOnly: !!blockType.editorOnly,
+        textures: blockType.textures || null
+    };
+    const panel = ensureCodeEditorPanel('block-editor-panel');
+    const textarea = panel.querySelector('#block-editor-panel-textarea');
+    const saveBtn = panel.querySelector('#block-editor-panel-save');
+    textarea.value = JSON.stringify(snapshot, null, 2);
+    panel.style.display = 'block';
+    if (document.pointerLockElement === document.body) {
+        document.exitPointerLock();
+    }
+    saveBtn.onclick = () => {
+        const text = textarea.value;
+        if (!text) return;
+        try {
+            const data = JSON.parse(text);
+            if (typeof data.name === 'string') blockType.name = data.name;
+            if (typeof data.solid === 'boolean') blockType.solid = data.solid;
+            if (typeof data.maxHP === 'number') blockType.maxHP = data.maxHP;
+            if (typeof data.breakDamage === 'number') blockType.breakDamage = data.breakDamage;
+            if (typeof data.bulletSpeed === 'number') blockType.bulletSpeed = data.bulletSpeed;
+            if (typeof data.bulletLifetime === 'number') blockType.bulletLifetime = data.bulletLifetime;
+            if (typeof data.isFloor === 'boolean') blockType.isFloor = data.isFloor;
+            if (typeof data.render === 'string' || data.render === null) blockType.render = data.render || undefined;
+            if (typeof data.editorOnly === 'boolean') blockType.editorOnly = data.editorOnly;
+            if (data.textures && typeof data.textures === 'object') blockType.textures = data.textures;
+            panel.style.display = 'none';
+        } catch (err) {
+            console.warn('JSON invalido:', err);
+        }
+    };
+}
+
+function cloneBlockTypeFrom(world, source) {
+    if (!source) return;
+    const maxId = Math.max(...Object.values(BLOCK_TYPES).map((b) => b.id || 0));
+    const newId = maxId + 1;
+    const name = prompt('Nome do novo bloco:', `${source.name} Copy`);
+    if (!name) return;
+    const clone = { ...source, id: newId, name };
+    const key = `CUSTOM_${newId}`;
+    BLOCK_TYPES[key] = clone;
+    const player = world.getPlayerEntity();
+    if (player && world.mode === 'editor' && player.inventory) {
+        player.inventory[newId] = 999;
+    }
+}
+
+function editWorldFromPanel(world) {
+    const snapshot = {
+        mode: world.mode,
+        playerEntityIndex: world.playerEntityIndex,
+        mapCenter: world._internal.mapCenter,
+        ui: { ...world.ui },
+        entities: world.entities.map((entity) => ({
+            id: entity.id,
+            name: entity.name,
+            type: entity.type,
+            faction: entity.faction,
+            x: entity.x,
+            y: entity.y,
+            z: entity.z,
+            yaw: entity.yaw,
+            pitch: entity.pitch,
+            hp: entity.hp,
+            maxHP: entity.maxHP,
+            isHostile: entity.isHostile,
+            isControllable: entity.isControllable,
+            isInteractable: entity.isInteractable,
+            npcTypeId: entity.npcTypeId || null,
+            selectedBlockTypeId: entity.selectedBlockType ? entity.selectedBlockType.id : null,
+            inventory: entity.inventory || null,
+            itemInventory: entity.itemInventory || {}
+        })),
+        blocks: world.blocks.map((block) => ({
+            x: block.x,
+            y: block.y,
+            z: block.z,
+            typeId: block.type ? block.type.id : null,
+            solid: block.solid,
+            isFloor: block.isFloor,
+            hp: block.hp,
+            maxHP: block.maxHP
+        })),
+        items: world.items.map((item) => ({
+            kind: item.kind,
+            blockTypeId: item.blockTypeId || null,
+            itemId: item.itemId || null,
+            amount: item.amount || 1,
+            x: item.mesh ? item.mesh.position.x : null,
+            y: item.mesh ? item.mesh.position.y : null,
+            z: item.mesh ? item.mesh.position.z : null
+        })),
+        projectiles: world.projectiles.map((proj) => ({
+            x: proj.mesh ? proj.mesh.position.x : null,
+            y: proj.mesh ? proj.mesh.position.y : null,
+            z: proj.mesh ? proj.mesh.position.z : null,
+            damage: proj.damage,
+            lifeTime: proj.lifeTime
+        })),
+        messages: world.messages.map((msg) => ({
+            text: msg.text,
+            duration: msg.duration,
+            startTime: msg.startTime
+        }))
+    };
+    const panel = ensureCodeEditorPanel('world-editor-panel');
+    const textarea = panel.querySelector('#world-editor-panel-textarea');
+    const saveBtn = panel.querySelector('#world-editor-panel-save');
+    textarea.value = JSON.stringify(snapshot, null, 2);
+    panel.style.display = 'block';
+    if (document.pointerLockElement === document.body) {
+        document.exitPointerLock();
+    }
+    saveBtn.onclick = () => {
+        const text = textarea.value;
+        if (!text) return;
+        try {
+            const data = JSON.parse(text);
+            if (data.mode === 'editor' || data.mode === 'shooter') {
+                setWorldMode(world, data.mode);
+            }
+            if (typeof data.playerEntityIndex === 'number') {
+                world.switchPlayerControl(Math.floor(data.playerEntityIndex));
+            }
+            if (data.mapCenter && typeof data.mapCenter === 'object') {
+                if (typeof data.mapCenter.x === 'number') world._internal.mapCenter.x = data.mapCenter.x;
+                if (typeof data.mapCenter.z === 'number') world._internal.mapCenter.z = data.mapCenter.z;
+            }
+            panel.style.display = 'none';
+        } catch (err) {
+            console.warn('JSON invalido:', err);
+        }
+    };
+}
+
+function getEntityPreviewColor(entity) {
+    const hue = ((entity.id || 1) * 0.17) % 1;
+    const color = new THREE.Color();
+    color.setHSL(hue, 0.75, 0.55);
+    return color;
+}
+
+function clearPreviewGroup(group) {
+    while (group.children.length > 0) {
+        const child = group.children.pop();
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+    }
+}
+
+function startEditorMoveCommand(world, entity) {
+    world._internal.editorMoveCommand = {
+        entityId: entity.id
+    };
+    updateEditorMovePreview(world);
+}
+
+function commitEditorMoveCommand(world) {
+    const command = world._internal.editorMoveCommand;
+    if (!command) return;
+    const entity = world.entities.find((e) => e.id === command.entityId);
+    let targetPos = world.ui.targetBlockPosition;
+    if (!targetPos) {
+        const camera = world._internal.camera;
+        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        targetPos = {
+            x: camera.position.x + dir.x * CONFIG.PLACEMENT_RANGE,
+            y: camera.position.y + dir.y * CONFIG.PLACEMENT_RANGE,
+            z: camera.position.z + dir.z * CONFIG.PLACEMENT_RANGE
+        };
+    }
+    if (entity && targetPos) {
+        entity.targetEntity = null;
+        entity.target = { x: targetPos.x, y: targetPos.y, z: targetPos.z };
+        entity.path = [];
+        entity.pathUpdateCounter = CONFIG.PATH_UPDATE_INTERVAL;
+        entity.editorMoveActive = true;
+    }
+    world._internal.editorMoveCommand = null;
+    if (world._internal.editorMoveLine) {
+        world._internal.editorMoveLine.visible = false;
+        clearPreviewGroup(world._internal.editorMoveLine);
+    }
+}
+
+function updateEditorMovePreview(world) {
+    const command = world._internal.editorMoveCommand;
+    if (!command || world.mode !== 'editor') {
+        if (world._internal.editorMoveLine) world._internal.editorMoveLine.visible = false;
+        return;
+    }
+    const entity = world.entities.find((e) => e.id === command.entityId);
+    if (!entity) return;
+    let targetPos = world.ui.targetBlockPosition;
+    if (!targetPos) {
+        const camera = world._internal.camera;
+        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        targetPos = {
+            x: camera.position.x + dir.x * CONFIG.PLACEMENT_RANGE,
+            y: camera.position.y + dir.y * CONFIG.PLACEMENT_RANGE,
+            z: camera.position.z + dir.z * CONFIG.PLACEMENT_RANGE
+        };
+    }
+    const start = new THREE.Vector3(entity.x, entity.y + 0.2, entity.z);
+    const end = new THREE.Vector3(targetPos.x, targetPos.y + 0.2, targetPos.z);
+    const distance = start.distanceTo(end);
+    const step = 0.6;
+    const steps = Math.max(2, Math.ceil(distance / step));
+    const color = getEntityPreviewColor(entity);
+
+    if (!world._internal.editorMoveLine) {
+        const group = new THREE.Group();
+        world._internal.editorMoveLine = group;
+        world._internal.scene.add(group);
+    }
+    const group = world._internal.editorMoveLine;
+    group.visible = true;
+    clearPreviewGroup(group);
+    group.userData.color = color.getHex();
+
+    const boxSize = 0.35;
+    const geometry = new THREE.BoxGeometry(boxSize, boxSize, boxSize);
+    const material = new THREE.MeshBasicMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.35,
+        depthWrite: false
+    });
+    for (let i = 0; i < steps; i++) {
+        const t = steps === 1 ? 0 : i / (steps - 1);
+        const pos = new THREE.Vector3().lerpVectors(start, end, t);
+        const cube = new THREE.Mesh(geometry, material);
+        cube.position.set(pos.x, pos.y, pos.z);
+        group.add(cube);
+    }
 }
 
 function buildEditorDefaultMap() {
@@ -554,10 +1066,23 @@ function applyMap(world, payload) {
         }
     }
     
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
     for (const entry of payload.blocks) {
         const blockType = Object.values(BLOCK_TYPES).find(bt => bt.id === entry.typeId);
         if (!blockType) continue;
         world.addBlock(entry.x, entry.y, entry.z, blockType, entry.isFloor);
+        if (entry.x < minX) minX = entry.x;
+        if (entry.x > maxX) maxX = entry.x;
+        if (entry.z < minZ) minZ = entry.z;
+        if (entry.z > maxZ) maxZ = entry.z;
+    }
+    if (minX !== Infinity) {
+        world._internal.mapBounds = { minX, maxX, minZ, maxZ };
+    } else {
+        world._internal.mapBounds = null;
     }
     
     if (Array.isArray(payload.items)) {
@@ -852,8 +1377,7 @@ function updateHud(world) {
         }
     }
     
-    const coins = player.itemInventory ? (player.itemInventory.coin || 0) : 0;
-    hud.textContent = `HP: ${hp}/${hpMax}\nItem: ${itemName} x${itemCount}\nCoins: ${coins}`;
+    hud.textContent = `HP: ${hp}/${hpMax}\nItem: ${itemName} x${itemCount}`;
 }
 
 function handleUseAction(world) {
@@ -892,6 +1416,12 @@ function handleUseAction(world) {
 function onKeyDown(world, e) {
     world._internal.keys[e.code] = true;
     const player = world.getPlayerEntity();
+    if (e.code === 'Tab') {
+        e.preventDefault();
+        const nextMode = world.mode === 'editor' ? 'shooter' : 'editor';
+        setWorldMode(world, nextMode);
+        return;
+    }
     
     if (e.code === 'Space' && player.onGround) {
         player.velocityY = CONFIG.JUMP_FORCE;
@@ -924,13 +1454,6 @@ function onKeyDown(world, e) {
         if (e.code === 'KeyQ') {
             dropSelectedBlock(world);
         }
-    }
-    
-    if (e.code === 'Tab') {
-        e.preventDefault();
-        const nextIndex = (world.playerEntityIndex + 1) % world.entities.length;
-        world.switchPlayerControl(nextIndex);
-        updateCurrentItemLabel(world);
     }
     
     if (e.code === 'Digit1') selectBlockType(world, BLOCK_TYPES.STONE);
@@ -967,8 +1490,20 @@ function onMouseMove(world, event) {
 }
 
 function onMouseDown(world, event) {
-    if (document.pointerLockElement !== document.body) return;
+    const isLocked = document.pointerLockElement === document.body;
+    if (event.button === 1 && world.mode === 'editor') {
+        if (isLocked) {
+            document.exitPointerLock();
+        }
+        openEditorContextMenu(world, event);
+        return;
+    }
+    if (!isLocked) return;
     if (event.button === 0) {
+        if (world.mode === 'editor' && world._internal.editorMoveCommand) {
+            commitEditorMoveCommand(world);
+            return;
+        }
         primaryAction(world);
     } else if (event.button === 2) {
         secondaryAction(world);
@@ -977,16 +1512,10 @@ function onMouseDown(world, event) {
 
 function primaryAction(world) {
     if (world.mode === 'editor') {
-        const player = world.getPlayerEntity();
-        const selection = player ? player.selectedItem : null;
-        if (selection && selection.kind === 'entity' && selection.action === 'despawn') {
-            if (!removeTargetItem(world)) {
-                if (!removeTargetEntity(world)) {
-                    removeTargetBlock(world);
-                }
+        if (!removeTargetBlock(world)) {
+            if (!removeTargetEntity(world)) {
+                removeTargetItem(world);
             }
-        } else {
-            removeTargetBlock(world);
         }
     } else {
         createProjectile(world);
@@ -1015,6 +1544,7 @@ function secondaryAction(world) {
         }
     }
 }
+
 
 function isMobile() {
     return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
@@ -1197,6 +1727,7 @@ function animate(world) {
         updateItems(world);
         updateMessages(world);
         checkInteractionTarget(world);
+        updateEditorMovePreview(world);
         updateCurrentItemLabel(world);
         updateHud(world);
         

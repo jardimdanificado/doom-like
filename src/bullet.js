@@ -207,15 +207,13 @@ export function updateProjectiles(world) {
                 
                 if (entity.hp <= 0) {
                     console.log(`${entity.name} foi derrotado!`);
-                    
-                    if (entity.isHostile && world.mode === 'shooter') {
-                        spawnItemDrop(world, ITEMS.COIN.id, 5, {
-                            x: entity.x,
-                            y: entity.y + 0.3,
-                            z: entity.z
-                        });
+                    if (entity.type === 'player') {
+                        entity.hp = 0;
+                        world._internal.scene.remove(proj.mesh);
+                        world.projectiles.splice(i, 1);
+                        hitSomething = true;
+                        break;
                     }
-
                     if (entity.type !== 'player') {
                         dropEntityInventory(world, entity);
                     }
