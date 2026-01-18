@@ -629,8 +629,10 @@ export function updateProjectiles(world) {
             }
         }
 
-        proj.velocity.y -= CONFIG.GRAVITY * 0.6;
-        proj.velocity.multiplyScalar(0.985);
+        const gravityScale = typeof proj.gravityScale === 'number' ? proj.gravityScale : 0.6;
+        const drag = typeof proj.drag === 'number' ? proj.drag : 0.985;
+        proj.velocity.y -= CONFIG.GRAVITY * gravityScale;
+        proj.velocity.multiplyScalar(drag);
         proj.mesh.position.add(proj.velocity);
         
         let hitSomething = false;

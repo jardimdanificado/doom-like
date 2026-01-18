@@ -113,13 +113,9 @@ async function init() {
     document.addEventListener('click', (event) => {
         const menu = document.getElementById('editor-context-menu');
         if (menu && menu.style.display === 'block') return;
-    const panel = document.getElementById('entity-editor-panel');
-    if (panel && panel.style.display === 'block') return;
-    const blockPanel = document.getElementById('block-editor-panel');
-    if (blockPanel && blockPanel.style.display === 'block') return;
-    const worldPanel = document.getElementById('world-editor-panel');
-    if (worldPanel && worldPanel.style.display === 'block') return;
-    document.body.requestPointerLock();
+        const picker = document.getElementById('editor-picker-panel');
+        if (picker && picker.style.display === 'block') return;
+        document.body.requestPointerLock();
 });
     
     document.addEventListener('mousemove', (e) => onMouseMove(world, e));
@@ -222,9 +218,7 @@ function createPlayer(world) {
     };
     const editorInventory = {};
     if (isEditor) {
-        Object.values(BLOCK_TYPES).forEach((blockType) => {
-            editorInventory[blockType.id] = 999;
-        });
+        editorInventory[BLOCK_TYPES.PLAYER_SPAWN.id] = 999;
     }
 
     world.addEntity({
@@ -246,8 +240,9 @@ function createPlayer(world) {
             [BLOCK_TYPES.SAND.id]: 20
         },
         itemInventory: {},
-        selectedBlockType: BLOCK_TYPES.GRASS,
-        selectedItem: { kind: 'block', id: BLOCK_TYPES.GRASS.id },
+        selectedBlockType: BLOCK_TYPES.PLAYER_SPAWN,
+        selectedItem: { kind: 'block', id: BLOCK_TYPES.PLAYER_SPAWN.id },
+        entitySpawners: [],
         npcData: playerNpcData,
         hp: isEditor ? 999999 : 100,
         maxHP: isEditor ? 999999 : 100,
@@ -257,6 +252,46 @@ function createPlayer(world) {
 
 function createNpcEntity(world, npcType, position, nameOverride = null, factionOverride = null) {
     const entityName = nameOverride ? ensureUniqueName(world, nameOverride) : generateUniqueName(world);
+    const inventory = {};
+    if (npcType.inventory && typeof npcType.inventory === 'object') {
+        Object.assign(inventory, npcType.inventory);
+    } else if (npcType.blockDrops && typeof npcType.blockDrops === 'object') {
+        for (const [blockKey, count] of Object.entries(npcType.blockDrops)) {
+            const blockType = BLOCK_TYPES[blockKey];
+            if (!blockType) continue;
+            const qty = Math.max(0, Math.floor(Number(count) || 0));
+            if (qty <= 0) continue;
+            inventory[blockType.id] = qty;
+        }
+    }
+    if (!Object.keys(inventory).length) {
+        const faction = factionOverride || npcType.faction || 'neutral';
+        const fallbackByFaction = {
+            village: BLOCK_TYPES.WOOD,
+            guard: BLOCK_TYPES.STONE,
+            outlaw: BLOCK_TYPES.WOOD,
+            beast: BLOCK_TYPES.GRASS,
+            aquatic: BLOCK_TYPES.SAND,
+            undead: BLOCK_TYPES.STONE,
+            demon: BLOCK_TYPES.GOLD,
+            plant: BLOCK_TYPES.PLANT,
+            construct: BLOCK_TYPES.STONE,
+            neutral: BLOCK_TYPES.STONE
+        };
+        const fallback = fallbackByFaction[faction] || BLOCK_TYPES.STONE;
+        inventory[fallback.id] = 50;
+    }
+    let selectedBlockType = null;
+    let bestDamage = -Infinity;
+    for (const blockType of Object.values(BLOCK_TYPES)) {
+        const count = inventory[blockType.id] || 0;
+        if (count <= 0 || blockType.droppable === false) continue;
+        const damage = typeof blockType.breakDamage === 'number' ? blockType.breakDamage : 0;
+        if (damage > bestDamage) {
+            bestDamage = damage;
+            selectedBlockType = blockType;
+        }
+    }
     const entity = world.addEntity({
         name: entityName,
         type: 'npc',
@@ -265,18 +300,15 @@ function createNpcEntity(world, npcType, position, nameOverride = null, factionO
         z: position.z,
         hp: npcType.maxHP,
         maxHP: npcType.maxHP,
-        isControllable: true,
+        isControllable: npcType.isControllable !== false,
         isInteractable: npcType.interactable !== false,
         npcData: npcType,
         npcTypeId: npcType.id,
         faction: factionOverride || npcType.faction || 'neutral',
         isHostile: !!npcType.isHostile,
-        inventory: {
-            [BLOCK_TYPES.STONE.id]: 50,
-            [BLOCK_TYPES.GRASS.id]: 10,
-            [BLOCK_TYPES.WOOD.id]: 10
-        },
-        selectedBlockType: BLOCK_TYPES.STONE,
+        inventory: inventory,
+        itemInventory: npcType.itemDrops || npcType.itemInventory || {},
+        selectedBlockType: selectedBlockType || BLOCK_TYPES.STONE,
         target: null,
         onInteract: (world, entity) => {
             const dialogue = entity.npcData.dialogue;
@@ -414,20 +446,31 @@ function setWorldMode(world, mode) {
             if (!player._savedInventory) {
                 player._savedInventory = player.inventory ? { ...player.inventory } : null;
                 player._savedItemInventory = player.itemInventory ? { ...player.itemInventory } : null;
+                player._savedEntitySpawners = Array.isArray(player.entitySpawners) ? [...player.entitySpawners] : [];
             }
-            const editorInventory = {};
-            Object.values(BLOCK_TYPES).forEach((blockType) => {
-                editorInventory[blockType.id] = 999;
-            });
-            player.inventory = editorInventory;
+            if (!player._editorInventory || player._editorInventoryVersion !== 2) {
+                player._editorInventory = {
+                    [BLOCK_TYPES.PLAYER_SPAWN.id]: 999
+                };
+                player._editorItemInventory = {};
+                player._editorEntitySpawners = [];
+                player._editorInventoryVersion = 2;
+            }
+            player.inventory = { ...player._editorInventory };
+            player.itemInventory = player._editorItemInventory ? { ...player._editorItemInventory } : {};
+            player.entitySpawners = Array.isArray(player._editorEntitySpawners) ? [...player._editorEntitySpawners] : [];
             player.noClip = true;
         } else {
+            player._editorInventory = player.inventory ? { ...player.inventory } : {};
+            player._editorItemInventory = player.itemInventory ? { ...player.itemInventory } : {};
+            player._editorEntitySpawners = Array.isArray(player.entitySpawners) ? [...player.entitySpawners] : [];
             if (player._savedInventory) {
                 player.inventory = { ...player._savedInventory };
             }
             if (player._savedItemInventory) {
                 player.itemInventory = { ...player._savedItemInventory };
             }
+            player.entitySpawners = Array.isArray(player._savedEntitySpawners) ? [...player._savedEntitySpawners] : [];
             player.noClip = false;
         }
     }
@@ -541,6 +584,12 @@ function ensureEditorContextMenu() {
     document.addEventListener('click', (e) => {
         if (!menu.contains(e.target)) {
             menu.style.display = 'none';
+            const picker = document.getElementById('editor-picker-panel');
+            if (!picker || picker.style.display !== 'block') {
+                if (document.pointerLockElement !== document.body) {
+                    document.body.requestPointerLock();
+                }
+            }
         }
     });
     return menu;
@@ -560,8 +609,157 @@ function addMenuItem(menu, label, onClick) {
     item.onclick = () => {
         onClick();
         menu.style.display = 'none';
+        const picker = document.getElementById('editor-picker-panel');
+        if (!picker || picker.style.display !== 'block') {
+            if (document.pointerLockElement !== document.body) {
+                document.body.requestPointerLock();
+            }
+        }
     };
     menu.appendChild(item);
+}
+
+let pickerState = null;
+
+function ensurePickerPanel() {
+    let panel = document.getElementById('editor-picker-panel');
+    if (panel) return panel;
+    panel = document.createElement('div');
+    panel.id = 'editor-picker-panel';
+    panel.style.position = 'fixed';
+    panel.style.inset = '20%';
+    panel.style.background = 'rgba(0,0,0,0.9)';
+    panel.style.border = '1px solid rgba(255,255,255,0.2)';
+    panel.style.boxShadow = '0 10px 24px rgba(0,0,0,0.45)';
+    panel.style.zIndex = '60';
+    panel.style.display = 'none';
+    panel.style.padding = '12px';
+    panel.style.color = 'white';
+    panel.style.fontFamily = '"Courier New", monospace';
+    panel.style.fontSize = '12px';
+
+    const title = document.createElement('div');
+    title.id = 'editor-picker-title';
+    title.style.fontWeight = 'bold';
+    title.style.marginBottom = '8px';
+
+    const category = document.createElement('select');
+    category.id = 'editor-picker-category';
+    category.style.width = '100%';
+    category.style.marginBottom = '6px';
+    category.style.background = 'rgba(255,255,255,0.05)';
+    category.style.color = 'white';
+    category.style.border = '1px solid rgba(255,255,255,0.25)';
+    category.style.padding = '4px';
+    category.style.fontFamily = '"Courier New", monospace';
+    category.style.fontSize = '12px';
+
+    const select = document.createElement('select');
+    select.id = 'editor-picker-select';
+    select.size = 10;
+    select.style.width = '100%';
+    select.style.height = 'calc(100% - 90px)';
+    select.style.background = 'rgba(10,10,10,0.9)';
+    select.style.color = 'white';
+    select.style.border = '1px solid rgba(255,255,255,0.25)';
+    select.style.padding = '6px';
+    select.style.fontFamily = '"Courier New", monospace';
+    select.style.fontSize = '12px';
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.justifyContent = 'flex-end';
+    actions.style.gap = '8px';
+    actions.style.marginTop = '8px';
+
+    const makeBtn = (label) => {
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        btn.style.padding = '6px 10px';
+        btn.style.fontFamily = '"Courier New", monospace';
+        btn.style.fontSize = '12px';
+        btn.style.background = 'rgba(255,255,255,0.1)';
+        btn.style.color = 'white';
+        btn.style.border = '1px solid rgba(255,255,255,0.2)';
+        btn.style.cursor = 'pointer';
+        return btn;
+    };
+
+    const cancelBtn = makeBtn('Cancelar');
+    cancelBtn.onclick = () => {
+        panel.style.display = 'none';
+        if (document.pointerLockElement !== document.body) {
+            document.body.requestPointerLock();
+        }
+    };
+    const addBtn = makeBtn('Adicionar');
+    addBtn.id = 'editor-picker-add';
+    actions.appendChild(cancelBtn);
+    actions.appendChild(addBtn);
+
+    category.onchange = () => {
+        rebuildPickerOptions();
+    };
+
+    panel.appendChild(title);
+    panel.appendChild(category);
+    panel.appendChild(select);
+    panel.appendChild(actions);
+    document.body.appendChild(panel);
+    return panel;
+}
+
+function rebuildPickerOptions() {
+    if (!pickerState) return;
+    const panel = ensurePickerPanel();
+    const category = panel.querySelector('#editor-picker-category');
+    const select = panel.querySelector('#editor-picker-select');
+    const currentId = category.value;
+    const entry = pickerState.categories.find((cat) => cat.id === currentId);
+    const options = entry ? entry.options : [];
+    select.innerHTML = '';
+    options.forEach((opt, index) => {
+        const option = document.createElement('option');
+        option.value = index;
+        option.textContent = opt.label;
+        select.appendChild(option);
+    });
+    select.selectedIndex = 0;
+}
+
+function openUnifiedPickerPanel({ title, categories, onPick }) {
+    const panel = ensurePickerPanel();
+    const titleEl = panel.querySelector('#editor-picker-title');
+    const category = panel.querySelector('#editor-picker-category');
+    const select = panel.querySelector('#editor-picker-select');
+    const addBtn = panel.querySelector('#editor-picker-add');
+
+    pickerState = { categories, onPick };
+    titleEl.textContent = title;
+    category.innerHTML = '';
+    categories.forEach((cat, index) => {
+        const option = document.createElement('option');
+        option.value = cat.id;
+        option.textContent = cat.label;
+        category.appendChild(option);
+    });
+    category.selectedIndex = 0;
+    rebuildPickerOptions();
+    addBtn.onclick = () => {
+        const entry = pickerState.categories.find((cat) => cat.id === category.value);
+        const selectedIndex = select.selectedIndex;
+        if (entry && entry.options[selectedIndex]) {
+            onPick(entry.id, entry.options[selectedIndex]);
+        }
+        panel.style.display = 'none';
+        if (document.pointerLockElement !== document.body) {
+            document.body.requestPointerLock();
+        }
+    };
+    panel.style.display = 'block';
+    if (document.pointerLockElement === document.body) {
+        document.exitPointerLock();
+    }
 }
 
 function openEntityInspectorWindow(entity) {
@@ -588,6 +786,9 @@ function openEditorContextMenu(world, event) {
     if (world.mode !== 'editor') return;
     const menu = ensureEditorContextMenu();
     menu.innerHTML = '';
+    if (document.pointerLockElement === document.body) {
+        document.exitPointerLock();
+    }
     const target = getTargetUnderCrosshair(world);
     if (target && target.kind === 'entity') {
         const entity = target.entity;
@@ -623,6 +824,61 @@ function openEditorContextMenu(world, event) {
     } else {
         addMenuItem(menu, 'Inspector world (nova aba)', () => openWorldInspectorWindow(world));
         addMenuItem(menu, 'Fechar', () => {});
+    }
+    if (world.mode === 'editor') {
+        addMenuItem(menu, 'Pegar conteúdo', () => {
+            const npcList = Object.values(NPC_TYPES).slice().sort((a, b) => a.name.localeCompare(b.name));
+            const npcOptions = npcList.map((npc) => ({
+                label: `${npc.name} (${getFactionName(npc.faction || 'neutral')})`,
+                value: npc.id
+            }));
+            const blockOptions = Object.values(BLOCK_TYPES)
+                .slice()
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((blockType) => ({
+                    label: blockType.name,
+                    value: blockType.id
+                }));
+            const itemOptions = Object.values(ITEMS)
+                .slice()
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((itemDef) => ({
+                    label: itemDef.name,
+                    value: itemDef.id
+                }));
+            openUnifiedPickerPanel({
+                title: 'Selecionar tipo',
+                categories: [
+                    { id: 'entity', label: 'Entidades', options: npcOptions },
+                    { id: 'block', label: 'Blocos', options: blockOptions },
+                    { id: 'item', label: 'Itens', options: itemOptions }
+                ],
+                onPick: (categoryId, option) => {
+                    const player = world.getPlayerEntity();
+                    if (!player) return;
+                    if (categoryId === 'entity') {
+                        player.entitySpawners = Array.isArray(player.entitySpawners) ? player.entitySpawners : [];
+                        if (!player.entitySpawners.includes(option.value)) {
+                            player.entitySpawners.push(option.value);
+                        }
+                        player.selectedItem = { kind: 'entity', action: 'spawn', npcTypeId: option.value };
+                    } else if (categoryId === 'block') {
+                        player.inventory = player.inventory || {};
+                        player.inventory[option.value] = 999;
+                        const blockType = Object.values(BLOCK_TYPES).find((b) => b.id === option.value);
+                        if (blockType) {
+                            player.selectedBlockType = blockType;
+                            player.selectedItem = { kind: 'block', id: blockType.id };
+                        }
+                    } else if (categoryId === 'item') {
+                        player.itemInventory = player.itemInventory || {};
+                        player.itemInventory[option.value] = 999;
+                        player.selectedItem = { kind: 'item', id: option.value };
+                    }
+                    updateCurrentItemLabel(world);
+                }
+            });
+        });
     }
     const x = Number.isFinite(event.clientX) ? event.clientX : window.innerWidth / 2;
     const y = Number.isFinite(event.clientY) ? event.clientY : window.innerHeight / 2;
@@ -1025,31 +1281,37 @@ function buildSelectionList(world, player) {
     }
     Object.values(BLOCK_TYPES).forEach((blockType) => {
         const count = player.inventory ? (player.inventory[blockType.id] || 0) : 0;
-        if (isEditor || count > 0) {
+        if (count > 0) {
             list.push({ kind: 'block', blockType });
         }
     });
     
     Object.values(ITEMS).forEach((itemDef) => {
         const count = player.itemInventory ? (player.itemInventory[itemDef.id] || 0) : 0;
-        if (isEditor || count > 0) {
+        if (count > 0) {
             list.push({ kind: 'item', itemDef });
         }
     });
 
     if (isEditor) {
-        const npcList = Object.values(NPC_TYPES).slice().sort((a, b) => {
-            const ia = FACTION_ORDER.indexOf(a.faction || '');
-            const ib = FACTION_ORDER.indexOf(b.faction || '');
-            const fa = ia === -1 ? 999 : ia;
-            const fb = ib === -1 ? 999 : ib;
-            if (fa !== fb) return fa - fb;
-            return a.name.localeCompare(b.name);
-        });
+        const spawners = Array.isArray(player.entitySpawners) ? player.entitySpawners : [];
+        const npcList = spawners
+            .map((id) => getNpcTypeById(id))
+            .filter(Boolean)
+            .sort((a, b) => {
+                const ia = FACTION_ORDER.indexOf(a.faction || '');
+                const ib = FACTION_ORDER.indexOf(b.faction || '');
+                const fa = ia === -1 ? 999 : ia;
+                const fb = ib === -1 ? 999 : ib;
+                if (fa !== fb) return fa - fb;
+                return a.name.localeCompare(b.name);
+            });
         npcList.forEach((npcType) => {
             list.push({ kind: 'entity', action: 'spawn', npcType });
         });
-        list.push({ kind: 'entity', action: 'despawn' });
+        if (npcList.length) {
+            list.push({ kind: 'entity', action: 'despawn' });
+        }
     }
     
     return list;

@@ -273,6 +273,36 @@ function getWeaponRange(entity) {
     return speed * life;
 }
 
+function chooseBestBlockTypeForEntity(entity) {
+    if (!entity || !entity.inventory) return null;
+    let best = null;
+    let bestDamage = -Infinity;
+    for (const blockType of Object.values(BLOCK_TYPES)) {
+        if (!blockType || blockType.droppable === false) continue;
+        const count = entity.inventory[blockType.id] || 0;
+        if (count <= 0) continue;
+        const damage = typeof blockType.breakDamage === 'number' ? blockType.breakDamage : 0;
+        if (damage > bestDamage) {
+            bestDamage = damage;
+            best = blockType;
+        }
+    }
+    return best;
+}
+
+function ensureEntityHasWeapon(entity) {
+    if (!entity || !entity.inventory) return;
+    const current = entity.selectedBlockType;
+    if (current) {
+        const count = entity.inventory[current.id] || 0;
+        if (count > 0) return;
+    }
+    const best = chooseBestBlockTypeForEntity(entity);
+    if (best) {
+        entity.selectedBlockType = best;
+    }
+}
+
 export function canWalkTo(world, entity, x, y, z, crouching) {
     const height = crouching ? CONFIG.ENTITY_HEIGHT_CROUCHED : CONFIG.ENTITY_HEIGHT;
     
@@ -793,6 +823,7 @@ export function updateFactionAI(world, entity) {
 
     const player = world.getPlayerEntity();
     entity.canSeePlayer = player ? canSeeTarget(world, entity, player) : false;
+    ensureEntityHasWeapon(entity);
 
     const target = findClosestVisibleEnemy(world, entity);
     if (!target) {
@@ -845,6 +876,7 @@ export function updateHostileAI(world, entity) {
     
     const player = world.getPlayerEntity();
     if (!player) return;
+    ensureEntityHasWeapon(entity);
     
     const dx = player.x - entity.x;
     const dy = player.y - entity.y;
@@ -855,8 +887,10 @@ export function updateHostileAI(world, entity) {
     if (distanceToPlayer <= CONFIG.HOSTILE_DETECTION_RANGE) {
         entity.targetEntity = player;
         
+        const weaponRange = getWeaponRange(entity);
+        const desiredRange = weaponRange > 0 ? weaponRange * 0.85 : CONFIG.HOSTILE_ATTACK_RANGE;
         // Se está no range de ataque, atira
-        if (distanceToPlayer <= CONFIG.HOSTILE_ATTACK_RANGE) {
+        if (distanceToPlayer <= desiredRange) {
             if (entity.shootCooldown === 0) {
                 shootProjectileFromEntity(world, entity, player);
                 entity.shootCooldown = CONFIG.HOSTILE_SHOOT_COOLDOWN;
@@ -957,7 +991,11 @@ export function updateHostileMovement(world, entity) {
 }
 
 export function shootProjectileFromEntity(world, shooter, target) {
-    if (!shooter.inventory || !shooter.selectedBlockType) return;
+    if (!shooter.inventory) return;
+    if (!shooter.selectedBlockType || shooter.selectedBlockType.droppable === false) {
+        ensureEntityHasWeapon(shooter);
+    }
+    if (!shooter.selectedBlockType) return;
     if (shooter.selectedBlockType.droppable === false) return;
     
     const ammoCount = shooter.inventory[shooter.selectedBlockType.id] || 0;
@@ -994,7 +1032,9 @@ export function shootProjectileFromEntity(world, shooter, target) {
         velocity: direction.multiplyScalar(speed),
         damage: damage,
         shooter: shooter, // Guarda referência de quem atirou
-        blockType: shooter.selectedBlockType
+        blockType: shooter.selectedBlockType,
+        gravityScale: 0,
+        drag: 1
     };
     
     world._internal.scene.add(mesh);
