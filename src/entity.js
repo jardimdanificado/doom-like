@@ -3,6 +3,8 @@ import BLOCK_TYPES from '../data/config/blocks.js';
 import { checkCollision, getGroundLevel } from './collision.js';
 import { getFactionRelation } from '../data/config/factions.js';
 import { alertEntitiesFromShot } from './bullet.js';
+import ITEMS from '../data/config/items.js';
+import { useItem } from './item.js';
 
 const aiRaycaster = new THREE.Raycaster();
 const VISION_ICONS = {
@@ -10,14 +12,14 @@ const VISION_ICONS = {
     hostile: { seen: 'sensed_hostile', unseen: 'sensed_hostile_unseen' }
 };
 const DIRECTION_ICONS = [
-    'poison_arrow_0',
-    'poison_arrow_1',
-    'poison_arrow_2',
-    'poison_arrow_3',
-    'poison_arrow_4',
-    'poison_arrow_5',
-    'poison_arrow_6',
-    'poison_arrow_7'
+    'arrow_0',
+    'arrow_1',
+    'arrow_2',
+    'arrow_3',
+    'arrow_4',
+    'arrow_5',
+    'arrow_6',
+    'arrow_7'
 ];
 const HP_ICONS = [
     { threshold: 0.15, key: 'mdam_almost_dead' },
@@ -26,6 +28,42 @@ const HP_ICONS = [
     { threshold: 0.7, key: 'mdam_moderately_damaged' },
     { threshold: 1.01, key: 'mdam_lightly_damaged' }
 ];
+
+const CONSUMABLE_HEALTH_RATIO = 0.6;
+const CONSUMABLE_ITEMS = Object.values(ITEMS).filter((item) => item.isConsumable);
+
+function getBestConsumableInInventory(entity) {
+    if (!entity.itemInventory) return null;
+    let best = null;
+    for (const itemDef of CONSUMABLE_ITEMS) {
+        const count = entity.itemInventory[itemDef.id] || 0;
+        if (count <= 0) continue;
+        if (!best || (itemDef.healValue || 0) > (best.healValue || 0)) {
+            best = itemDef;
+        }
+    }
+    return best;
+}
+
+function shouldUseConsumable(entity) {
+    const maxHP = entity.maxHP || 0;
+    if (maxHP <= 0) return false;
+    if (entity.hp >= maxHP * CONSUMABLE_HEALTH_RATIO) return false;
+    return entity.hp < maxHP;
+}
+
+function tryUseConsumable(world, entity) {
+    if (!shouldUseConsumable(entity)) return false;
+    const consumable = getBestConsumableInInventory(entity);
+    if (!consumable) return false;
+    const count = entity.itemInventory ? (entity.itemInventory[consumable.id] || 0) : 0;
+    if (count <= 0) return false;
+    if (useItem(world, entity, consumable, 1)) {
+        entity.itemInventory[consumable.id] = Math.max(0, count - 1);
+        return true;
+    }
+    return false;
+}
 
 
 
@@ -817,6 +855,8 @@ export function updateFactionAI(world, entity) {
         return;
     }
 
+    tryUseConsumable(world, entity);
+
     if (entity.shootCooldown > 0) {
         entity.shootCooldown--;
     }
@@ -874,6 +914,8 @@ export function updateHostileAI(world, entity) {
         entity.shootCooldown--;
     }
     
+    tryUseConsumable(world, entity);
+
     const player = world.getPlayerEntity();
     if (!player) return;
     ensureEntityHasWeapon(entity);

@@ -4,6 +4,7 @@ const makeFoodItem = (id, name, textureKey, heal) => ({
     placeable: false,
     textureKey,
     isConsumable: true,
+    healValue: heal,
     use: (world, entity, amount) => {
         const total = heal * amount;
         entity.hp = Math.min(entity.maxHP || 100, (entity.hp || 0) + total);
@@ -17,6 +18,7 @@ export default {
         placeable: false,
         textureKey: 'wood',
         isConsumable: true,
+        healValue: 25,
         use: (world, entity, amount) => {
             const heal = 25 * amount;
             entity.hp = Math.min(entity.maxHP || 100, (entity.hp || 0) + heal);

@@ -11,6 +11,30 @@ export default {
         maxHP: 100,
         dialogue: 'Ola, viajante! Bem-vindo a vila!'
     },
+    VILLAGER_TRADER: {
+        id: 676,
+        name: 'Mercador',
+        texture: 'npc',
+        width: 0.8,
+        height: 1.6,
+        interactable: true,
+        faction: 'village',
+        isHostile: false,
+        maxHP: 110,
+        dialogue: 'Caro, mas justo. O que deseja comprar?'
+    },
+    VILLAGER_ELDER: {
+        id: 677,
+        name: 'Ancião',
+        texture: 'npc',
+        width: 0.8,
+        height: 1.6,
+        interactable: true,
+        faction: 'village',
+        isHostile: false,
+        maxHP: 120,
+        dialogue: 'A sabedoria da vila previne muitos perigos.'
+    },
     GUARD: {
         id: 2,
         name: 'Guarda',
@@ -23,6 +47,30 @@ export default {
         maxHP: 150,
         dialogue: 'Mantenha a paz por aqui!'
     },
+    GUARD_SOLDIER: {
+        id: 678,
+        name: 'Soldado',
+        texture: 'npc',
+        width: 0.8,
+        height: 1.6,
+        interactable: true,
+        faction: 'guard',
+        isHostile: false,
+        maxHP: 160,
+        dialogue: 'Não passe sem autorização.'
+    },
+    GUARD_RANGER: {
+        id: 679,
+        name: 'Patrulheiro',
+        texture: 'npc',
+        width: 0.8,
+        height: 1.6,
+        interactable: true,
+        faction: 'guard',
+        isHostile: false,
+        maxHP: 140,
+        dialogue: 'Olho vivo e flecha pronta.'
+    },
     OUTLAW: {
         id: 3,
         name: 'Bandido',
@@ -34,6 +82,30 @@ export default {
         isHostile: true,
         maxHP: 80,
         dialogue: 'Fique fora do meu caminho.'
+    },
+    OUTLAW_RUFFIAN: {
+        id: 680,
+        name: 'Brigão',
+        texture: 'npc',
+        width: 0.8,
+        height: 1.6,
+        interactable: true,
+        faction: 'outlaw',
+        isHostile: true,
+        maxHP: 90,
+        dialogue: 'Tento grosso, meu amigo.'
+    },
+    OUTLAW_SNIPER: {
+        id: 681,
+        name: 'Atirador',
+        texture: 'npc',
+        width: 0.8,
+        height: 1.6,
+        interactable: true,
+        faction: 'outlaw',
+        isHostile: true,
+        maxHP: 85,
+        dialogue: 'Nada de movimentos bruscos.'
     },
     PROP_CHEST: {
         id: 4,

@@ -20,6 +20,88 @@ import audioSystem from './audio.js';
 import { getGroundLevel } from './collision.js';
 import { openInspectorWindow } from './inspector.js';
 
+const TEXTURE_PREVIEW_MAP = texturesToLoad.reduce((map, entry) => {
+    map[entry.key] = entry.url;
+    return map;
+}, {});
+
+function resolvePreviewTextureUrl(key) {
+    return TEXTURE_PREVIEW_MAP[key] || null;
+}
+
+function getBlockThumbnailTextureKey(blockType) {
+    if (!blockType || !blockType.textures) return null;
+    return blockType.textures.all ||
+        blockType.textures.top ||
+        blockType.textures.side ||
+        blockType.textures.bottom ||
+        null;
+}
+
+let loadingOverlay = null;
+
+function ensureLoadingOverlay() {
+    if (loadingOverlay) return loadingOverlay;
+    const overlay = document.createElement('div');
+    overlay.id = 'loading-overlay';
+    overlay.style.position = 'fixed';
+    overlay.style.inset = '0';
+    overlay.style.background = 'rgba(0, 0, 0, 0.85)';
+    overlay.style.color = 'white';
+    overlay.style.display = 'none';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.zIndex = '80';
+    overlay.style.fontFamily = '"Courier New", monospace';
+    overlay.style.fontSize = '18px';
+    overlay.style.textAlign = 'center';
+    overlay.style.pointerEvents = 'auto';
+    overlay.innerText = 'Carregando…';
+    document.body.appendChild(overlay);
+    loadingOverlay = overlay;
+    return overlay;
+}
+
+function showLoadingOverlay(message = 'Carregando…') {
+    const overlay = ensureLoadingOverlay();
+    overlay.textContent = message;
+    overlay.style.display = 'flex';
+}
+
+function hideLoadingOverlay() {
+    if (!loadingOverlay) return;
+    loadingOverlay.style.display = 'none';
+}
+
+const INVENTORY_CATEGORIES = [
+    { id: 'item', label: 'Itens' },
+    { id: 'block', label: 'Blocos' }
+];
+
+const INVENTORY_ITEM_OPTIONS = Object.values(ITEMS)
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((itemDef) => ({
+        id: itemDef.id,
+        label: itemDef.name,
+        textureKey: itemDef.textureKey || null,
+        textureUrl: resolvePreviewTextureUrl(itemDef.textureKey)
+    }));
+
+const INVENTORY_BLOCK_OPTIONS = Object.values(BLOCK_TYPES)
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((blockType) => {
+        const textureKey = getBlockThumbnailTextureKey(blockType);
+        return {
+            id: blockType.id,
+            label: blockType.name,
+            textureKey,
+            textureUrl: resolvePreviewTextureUrl(textureKey)
+        };
+    });
+
+let inventoryEditorState = null;
 // ============================================================
 // INICIALIZAÇÃO
 // ============================================================
@@ -103,6 +185,7 @@ async function init() {
     
     await initAudio();
     
+    showLoadingOverlay('Carregando texturas...');
     loadTextures(world);
     
     window.addEventListener('resize', () => onWindowResize(world));
@@ -115,6 +198,7 @@ async function init() {
         if (menu && menu.style.display === 'block') return;
         const picker = document.getElementById('editor-picker-panel');
         if (picker && picker.style.display === 'block') return;
+        if (isInventoryEditorOpen()) return;
         document.body.requestPointerLock();
 });
     
@@ -156,6 +240,7 @@ function loadTextures(world) {
     function checkLoaded() {
         loaded++;
         if (loaded === total) {
+            hideLoadingOverlay();
             world._internal.texturesLoaded = true;
             initWorld(world);
         }
@@ -250,7 +335,7 @@ function createPlayer(world) {
     });
 }
 
-function createNpcEntity(world, npcType, position, nameOverride = null, factionOverride = null) {
+function createNpcEntity(world, npcType, position, nameOverride = null, factionOverride = null, options = {}) {
     const entityName = nameOverride ? ensureUniqueName(world, nameOverride) : generateUniqueName(world);
     const inventory = {};
     if (npcType.inventory && typeof npcType.inventory === 'object') {
@@ -264,6 +349,12 @@ function createNpcEntity(world, npcType, position, nameOverride = null, factionO
             inventory[blockType.id] = qty;
         }
     }
+    if (options.inventory && typeof options.inventory === 'object') {
+        Object.assign(inventory, options.inventory);
+    }
+    const itemInventory = options.itemInventory && typeof options.itemInventory === 'object'
+        ? { ...options.itemInventory }
+        : (npcType.itemDrops || npcType.itemInventory || {});
     if (!Object.keys(inventory).length) {
         const faction = factionOverride || npcType.faction || 'neutral';
         const fallbackByFaction = {
@@ -292,6 +383,12 @@ function createNpcEntity(world, npcType, position, nameOverride = null, factionO
             selectedBlockType = blockType;
         }
     }
+    if (options.selectedBlockTypeId) {
+        const forced = Object.values(BLOCK_TYPES).find((b) => b.id === options.selectedBlockTypeId);
+        if (forced) {
+            selectedBlockType = forced;
+        }
+    }
     const entity = world.addEntity({
         name: entityName,
         type: 'npc',
@@ -307,7 +404,7 @@ function createNpcEntity(world, npcType, position, nameOverride = null, factionO
         faction: factionOverride || npcType.faction || 'neutral',
         isHostile: !!npcType.isHostile,
         inventory: inventory,
-        itemInventory: npcType.itemDrops || npcType.itemInventory || {},
+        itemInventory: itemInventory,
         selectedBlockType: selectedBlockType || BLOCK_TYPES.STONE,
         target: null,
         onInteract: (world, entity) => {
@@ -379,7 +476,6 @@ function ensureHud() {
     if (document.getElementById('hud')) return;
     const hud = document.createElement('div');
     hud.id = 'hud';
-    hud.textContent = 'HP: -\nItem: -\nCoins: -';
     hud.style.position = 'fixed';
     hud.style.top = '10px';
     hud.style.left = '10px';
@@ -389,6 +485,29 @@ function ensureHud() {
     hud.style.lineHeight = '1.4';
     hud.style.whiteSpace = 'pre-line';
     hud.style.zIndex = '10';
+    hud.style.display = 'flex';
+    hud.style.alignItems = 'center';
+    hud.style.gap = '10px';
+
+    const hudText = document.createElement('div');
+    hudText.id = 'hud-text';
+    hudText.textContent = 'HP: -\nItem: -\nCoins: -';
+    hudText.style.fontFamily = '"Courier New", monospace';
+    hudText.style.whiteSpace = 'pre-line';
+
+    const hudPreview = document.createElement('div');
+    hudPreview.id = 'hud-item-preview';
+    hudPreview.style.width = '48px';
+    hudPreview.style.height = '48px';
+    hudPreview.style.border = '1px solid rgba(255,255,255,0.4)';
+    hudPreview.style.background = 'rgba(0,0,0,0.35)';
+    hudPreview.style.backgroundSize = 'contain';
+    hudPreview.style.backgroundRepeat = 'no-repeat';
+    hudPreview.style.backgroundPosition = 'center';
+    hudPreview.style.boxShadow = 'inset 0 0 10px rgba(0,0,0,0.6)';
+
+    hud.appendChild(hudText);
+    hud.appendChild(hudPreview);
     document.body.appendChild(hud);
 }
 
@@ -586,7 +705,7 @@ function ensureEditorContextMenu() {
             menu.style.display = 'none';
             const picker = document.getElementById('editor-picker-panel');
             if (!picker || picker.style.display !== 'block') {
-                if (document.pointerLockElement !== document.body) {
+                if (!isInventoryEditorOpen() && document.pointerLockElement !== document.body) {
                     document.body.requestPointerLock();
                 }
             }
@@ -611,7 +730,7 @@ function addMenuItem(menu, label, onClick) {
         menu.style.display = 'none';
         const picker = document.getElementById('editor-picker-panel');
         if (!picker || picker.style.display !== 'block') {
-            if (document.pointerLockElement !== document.body) {
+            if (!isInventoryEditorOpen() && document.pointerLockElement !== document.body) {
                 document.body.requestPointerLock();
             }
         }
@@ -654,17 +773,59 @@ function ensurePickerPanel() {
     category.style.fontFamily = '"Courier New", monospace';
     category.style.fontSize = '12px';
 
+    const faction = document.createElement('select');
+    faction.id = 'editor-picker-faction';
+    faction.style.width = '100%';
+    faction.style.marginBottom = '6px';
+    faction.style.display = 'none';
+    faction.style.background = 'rgba(255,255,255,0.05)';
+    faction.style.color = 'white';
+    faction.style.border = '1px solid rgba(255,255,255,0.25)';
+    faction.style.padding = '4px';
+    faction.style.fontFamily = '"Courier New", monospace';
+    faction.style.fontSize = '12px';
+
     const select = document.createElement('select');
     select.id = 'editor-picker-select';
-    select.size = 10;
+    select.size = 8;
     select.style.width = '100%';
-    select.style.height = 'calc(100% - 90px)';
     select.style.background = 'rgba(10,10,10,0.9)';
     select.style.color = 'white';
     select.style.border = '1px solid rgba(255,255,255,0.25)';
     select.style.padding = '6px';
     select.style.fontFamily = '"Courier New", monospace';
     select.style.fontSize = '12px';
+
+    const preview = document.createElement('div');
+    preview.id = 'editor-picker-preview';
+    preview.style.display = 'flex';
+    preview.style.gap = '8px';
+    preview.style.alignItems = 'center';
+    preview.style.margin = '8px 0';
+    preview.style.padding = '6px';
+    preview.style.border = '1px solid rgba(255,255,255,0.25)';
+    preview.style.minHeight = '90px';
+
+    const previewImg = document.createElement('div');
+    previewImg.id = 'editor-picker-preview-img';
+    previewImg.style.width = '80px';
+    previewImg.style.height = '80px';
+    previewImg.style.background = 'rgba(0,0,0,0.4)';
+    previewImg.style.border = '1px solid rgba(255,255,255,0.25)';
+    previewImg.style.backgroundSize = 'contain';
+    previewImg.style.backgroundRepeat = 'no-repeat';
+    previewImg.style.backgroundPosition = 'center';
+
+    const previewLabel = document.createElement('div');
+    previewLabel.id = 'editor-picker-preview-label';
+    previewLabel.style.flex = '1';
+    previewLabel.style.fontSize = '11px';
+    previewLabel.style.lineHeight = '1.2';
+    previewLabel.style.overflow = 'hidden';
+    previewLabel.style.wordBreak = 'break-word';
+
+    preview.appendChild(previewImg);
+    preview.appendChild(previewLabel);
 
     const actions = document.createElement('div');
     actions.style.display = 'flex';
@@ -688,7 +849,7 @@ function ensurePickerPanel() {
     const cancelBtn = makeBtn('Cancelar');
     cancelBtn.onclick = () => {
         panel.style.display = 'none';
-        if (document.pointerLockElement !== document.body) {
+        if (!isInventoryEditorOpen() && document.pointerLockElement !== document.body) {
             document.body.requestPointerLock();
         }
     };
@@ -698,15 +859,58 @@ function ensurePickerPanel() {
     actions.appendChild(addBtn);
 
     category.onchange = () => {
+        pickerState.selectedFaction = 'all';
         rebuildPickerOptions();
     };
+    faction.onchange = () => {
+        pickerState.selectedFaction = faction.value;
+        rebuildPickerOptions();
+    };
+    select.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const maxIdx = select.options.length - 1;
+        if (maxIdx < 0) return;
+        const offset = e.deltaY > 0 ? 1 : -1;
+        const nextIdx = Math.min(maxIdx, Math.max(0, (select.selectedIndex >= 0 ? select.selectedIndex : 0) + offset));
+        select.selectedIndex = nextIdx;
+        rebuildPickerPreview();
+    });
+    select.addEventListener('change', rebuildPickerPreview);
 
     panel.appendChild(title);
     panel.appendChild(category);
+    panel.appendChild(faction);
+    panel.appendChild(preview);
     panel.appendChild(select);
     panel.appendChild(actions);
     document.body.appendChild(panel);
     return panel;
+}
+
+function ensureEntitySpawners(player) {
+    if (!player) return [];
+    if (!Array.isArray(player.entitySpawners)) {
+        player.entitySpawners = [];
+    }
+    return player.entitySpawners;
+}
+
+function addEntitySpawner(player, spawner) {
+    const list = ensureEntitySpawners(player);
+    const normalized = {
+        id: spawner.id || cryptoRandomId(),
+        npcTypeId: spawner.npcTypeId,
+        inventory: spawner.inventory ? { ...spawner.inventory } : null,
+        itemInventory: spawner.itemInventory ? { ...spawner.itemInventory } : null,
+        selectedBlockTypeId: spawner.selectedBlockTypeId || null,
+        label: spawner.label || null
+    };
+    list.push(normalized);
+    return normalized;
+}
+
+function cryptoRandomId() {
+    return Math.random().toString(36).slice(2, 10);
 }
 
 function rebuildPickerOptions() {
@@ -716,7 +920,39 @@ function rebuildPickerOptions() {
     const select = panel.querySelector('#editor-picker-select');
     const currentId = category.value;
     const entry = pickerState.categories.find((cat) => cat.id === currentId);
-    const options = entry ? entry.options : [];
+    let options = entry ? entry.options : [];
+    const factionSelect = panel.querySelector('#editor-picker-faction');
+    if (entry && entry.id === 'entity') {
+        const factionOptions = [{ id: 'all', name: 'Todas' }];
+        const seen = new Set();
+        options.forEach((opt) => {
+            const factionId = opt.faction || 'neutral';
+            if (!seen.has(factionId)) {
+                seen.add(factionId);
+                factionOptions.push({
+                    id: factionId,
+                    name: (opt.factionName || factionId.charAt(0).toUpperCase() + factionId.slice(1))
+                });
+            }
+        });
+        factionSelect.innerHTML = '';
+        factionOptions.forEach((opt) => {
+            const optionEl = document.createElement('option');
+            optionEl.value = opt.id;
+            optionEl.textContent = opt.name;
+            factionSelect.appendChild(optionEl);
+        });
+        factionSelect.style.display = 'block';
+        if (!pickerState.selectedFaction) {
+            pickerState.selectedFaction = 'all';
+        }
+        factionSelect.value = pickerState.selectedFaction;
+        if (pickerState.selectedFaction !== 'all') {
+            options = options.filter((opt) => (opt.faction || 'neutral') === pickerState.selectedFaction);
+        }
+    } else {
+        factionSelect.style.display = 'none';
+    }
     select.innerHTML = '';
     options.forEach((opt, index) => {
         const option = document.createElement('option');
@@ -724,7 +960,33 @@ function rebuildPickerOptions() {
         option.textContent = opt.label;
         select.appendChild(option);
     });
-    select.selectedIndex = 0;
+    select.selectedIndex = options.length ? 0 : -1;
+    rebuildPickerPreview();
+}
+
+function rebuildPickerPreview() {
+    if (!pickerState) return;
+    const panel = ensurePickerPanel();
+    const select = panel.querySelector('#editor-picker-select');
+    const previewImg = panel.querySelector('#editor-picker-preview-img');
+    const previewLabel = panel.querySelector('#editor-picker-preview-label');
+    const category = panel.querySelector('#editor-picker-category');
+    const entry = pickerState.categories.find((cat) => cat.id === category.value);
+    const selectedIndex = select.selectedIndex;
+    const hasOptions = entry && Array.isArray(entry.options);
+    const option = hasOptions && selectedIndex >= 0 && selectedIndex < entry.options.length
+        ? entry.options[selectedIndex]
+        : null;
+    if (option && option.textureUrl) {
+        previewImg.style.backgroundImage = `url("${option.textureUrl}")`;
+    } else {
+        previewImg.style.backgroundImage = '';
+    }
+    let labelText = option ? option.label : entry ? entry.label : '';
+    if (entry && entry.id === 'entity' && option && option.factionName) {
+        labelText += `\n${option.factionName}`;
+    }
+    previewLabel.textContent = labelText;
 }
 
 function openUnifiedPickerPanel({ title, categories, onPick }) {
@@ -734,7 +996,7 @@ function openUnifiedPickerPanel({ title, categories, onPick }) {
     const select = panel.querySelector('#editor-picker-select');
     const addBtn = panel.querySelector('#editor-picker-add');
 
-    pickerState = { categories, onPick };
+    pickerState = { categories, onPick, selectedFaction: 'all' };
     titleEl.textContent = title;
     category.innerHTML = '';
     categories.forEach((cat, index) => {
@@ -751,14 +1013,462 @@ function openUnifiedPickerPanel({ title, categories, onPick }) {
         if (entry && entry.options[selectedIndex]) {
             onPick(entry.id, entry.options[selectedIndex]);
         }
-        panel.style.display = 'none';
-        if (document.pointerLockElement !== document.body) {
-            document.body.requestPointerLock();
-        }
+        rebuildPickerPreview();
     };
     panel.style.display = 'block';
     if (document.pointerLockElement === document.body) {
         document.exitPointerLock();
+    }
+}
+
+function getInventoryOptionList(category) {
+    return category === 'block' ? INVENTORY_BLOCK_OPTIONS : INVENTORY_ITEM_OPTIONS;
+}
+
+function isInventoryEditorOpen() {
+    const panel = document.getElementById('editor-entity-inventory-panel');
+    return panel && panel.style.display === 'block';
+}
+
+function ensureEntityInventoryPanel() {
+    let panel = document.getElementById('editor-entity-inventory-panel');
+    if (panel) return panel;
+    panel = document.createElement('div');
+    panel.id = 'editor-entity-inventory-panel';
+    panel.style.position = 'fixed';
+    panel.style.inset = '12% 18%';
+    panel.style.background = 'rgba(0,0,0,0.95)';
+    panel.style.border = '1px solid rgba(255,255,255,0.3)';
+    panel.style.boxShadow = '0 12px 30px rgba(0,0,0,0.6)';
+    panel.style.zIndex = '65';
+    panel.style.display = 'none';
+    panel.style.padding = '14px';
+    panel.style.color = 'white';
+    panel.style.fontFamily = '"Courier New", monospace';
+    panel.style.fontSize = '12px';
+    panel.style.maxHeight = '75%';
+    panel.style.overflow = 'auto';
+
+    const header = document.createElement('div');
+    header.style.display = 'flex';
+    header.style.justifyContent = 'space-between';
+    header.style.alignItems = 'center';
+    header.style.marginBottom = '10px';
+
+    const title = document.createElement('div');
+    title.id = 'editor-inventory-title';
+    title.style.fontWeight = 'bold';
+    title.style.fontSize = '14px';
+    title.textContent = 'Inventário';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Fechar';
+    closeBtn.style.marginLeft = '8px';
+    closeBtn.style.padding = '4px 10px';
+    closeBtn.style.fontFamily = '"Courier New", monospace';
+    closeBtn.style.fontSize = '12px';
+    closeBtn.style.background = 'rgba(255,255,255,0.08)';
+    closeBtn.style.border = '1px solid rgba(255,255,255,0.2)';
+    closeBtn.style.color = 'white';
+    closeBtn.style.cursor = 'pointer';
+    closeBtn.onclick = () => closeEntityInventoryPanel();
+
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+
+    const category = document.createElement('select');
+    category.id = 'editor-inventory-category';
+    category.style.width = '100%';
+    category.style.marginBottom = '6px';
+    category.style.background = 'rgba(255,255,255,0.05)';
+    category.style.color = 'white';
+    category.style.border = '1px solid rgba(255,255,255,0.2)';
+    category.style.padding = '4px';
+    category.style.fontFamily = '"Courier New", monospace';
+    category.style.fontSize = '12px';
+
+    INVENTORY_CATEGORIES.forEach((cat) => {
+        const option = document.createElement('option');
+        option.value = cat.id;
+        option.textContent = cat.label;
+        category.appendChild(option);
+    });
+
+    const preview = document.createElement('div');
+    preview.id = 'editor-inventory-preview';
+    preview.style.display = 'flex';
+    preview.style.gap = '8px';
+    preview.style.alignItems = 'center';
+    preview.style.margin = '8px 0';
+    preview.style.padding = '6px';
+    preview.style.border = '1px solid rgba(255,255,255,0.25)';
+    preview.style.minHeight = '70px';
+
+    const previewImg = document.createElement('div');
+    previewImg.id = 'editor-inventory-preview-img';
+    previewImg.style.width = '60px';
+    previewImg.style.height = '60px';
+    previewImg.style.border = '1px solid rgba(255,255,255,0.25)';
+    previewImg.style.background = 'rgba(0,0,0,0.4)';
+    previewImg.style.backgroundSize = 'contain';
+    previewImg.style.backgroundRepeat = 'no-repeat';
+    previewImg.style.backgroundPosition = 'center';
+
+    const previewLabel = document.createElement('div');
+    previewLabel.id = 'editor-inventory-preview-label';
+    previewLabel.style.flex = '1';
+    previewLabel.style.fontSize = '12px';
+    previewLabel.style.lineHeight = '1.2';
+    previewLabel.style.whiteSpace = 'pre-line';
+    previewLabel.style.overflow = 'hidden';
+    previewLabel.style.wordBreak = 'break-word';
+
+    preview.appendChild(previewImg);
+    preview.appendChild(previewLabel);
+
+    const select = document.createElement('select');
+    select.id = 'editor-inventory-select';
+    select.size = 8;
+    select.style.width = '100%';
+    select.style.background = 'rgba(10,10,10,0.9)';
+    select.style.color = 'white';
+    select.style.border = '1px solid rgba(255,255,255,0.25)';
+    select.style.padding = '6px';
+    select.style.fontFamily = '"Courier New", monospace';
+    select.style.fontSize = '12px';
+    select.style.marginBottom = '8px';
+    select.style.outline = 'none';
+
+    const controls = document.createElement('div');
+    controls.style.display = 'flex';
+    controls.style.alignItems = 'center';
+    controls.style.justifyContent = 'space-between';
+    controls.style.flexWrap = 'wrap';
+    controls.style.gap = '8px';
+    controls.style.marginBottom = '8px';
+
+    const quantityGroup = document.createElement('div');
+    quantityGroup.style.display = 'flex';
+    quantityGroup.style.alignItems = 'center';
+    quantityGroup.style.gap = '4px';
+    quantityGroup.style.fontSize = '12px';
+
+    const quantityLabel = document.createElement('span');
+    quantityLabel.textContent = 'Quantidade:';
+    quantityLabel.style.fontSize = '12px';
+
+    const quantityInput = document.createElement('input');
+    quantityInput.type = 'number';
+    quantityInput.min = '1';
+    quantityInput.value = '1';
+    quantityInput.style.width = '60px';
+    quantityInput.style.padding = '4px';
+    quantityInput.style.background = 'rgba(255,255,255,0.08)';
+    quantityInput.style.border = '1px solid rgba(255,255,255,0.2)';
+    quantityInput.style.color = 'white';
+    quantityInput.style.fontFamily = '"Courier New", monospace';
+    quantityInput.style.fontSize = '12px';
+
+    quantityGroup.appendChild(quantityLabel);
+    quantityGroup.appendChild(quantityInput);
+
+    const addBtn = document.createElement('button');
+    addBtn.textContent = 'Adicionar';
+    addBtn.style.padding = '6px 12px';
+    addBtn.style.fontFamily = '"Courier New", monospace';
+    addBtn.style.fontSize = '12px';
+    addBtn.style.background = 'rgba(255,255,255,0.1)';
+    addBtn.style.border = '1px solid rgba(255,255,255,0.25)';
+    addBtn.style.color = 'white';
+    addBtn.style.cursor = 'pointer';
+
+    controls.appendChild(quantityGroup);
+    controls.appendChild(addBtn);
+
+    const inventoryTitle = document.createElement('div');
+    inventoryTitle.textContent = 'Inventário atual';
+    inventoryTitle.style.margin = '8px 0 4px';
+    inventoryTitle.style.fontSize = '12px';
+    inventoryTitle.style.opacity = '0.8';
+
+    const inventoryList = document.createElement('div');
+    inventoryList.id = 'editor-inventory-list';
+    inventoryList.style.display = 'flex';
+    inventoryList.style.flexDirection = 'column';
+    inventoryList.style.gap = '6px';
+    inventoryList.style.maxHeight = '250px';
+    inventoryList.style.overflowY = 'auto';
+    inventoryList.style.paddingRight = '4px';
+
+    const inventoryActions = document.createElement('div');
+    inventoryActions.style.display = 'flex';
+    inventoryActions.style.justifyContent = 'flex-end';
+    inventoryActions.style.flexWrap = 'wrap';
+    inventoryActions.style.gap = '8px';
+    inventoryActions.style.marginTop = '6px';
+
+    const clearBtn = document.createElement('button');
+    clearBtn.textContent = 'Limpar inventário';
+    clearBtn.style.padding = '4px 10px';
+    clearBtn.style.fontFamily = '"Courier New", monospace';
+    clearBtn.style.fontSize = '12px';
+    clearBtn.style.background = 'rgba(255,255,255,0.08)';
+    clearBtn.style.border = '1px solid rgba(255,255,255,0.2)';
+    clearBtn.style.color = 'white';
+    clearBtn.style.cursor = 'pointer';
+
+    inventoryActions.appendChild(clearBtn);
+
+    panel.appendChild(header);
+    panel.appendChild(category);
+    panel.appendChild(preview);
+    panel.appendChild(select);
+    panel.appendChild(controls);
+    panel.appendChild(inventoryTitle);
+    panel.appendChild(inventoryList);
+    panel.appendChild(inventoryActions);
+
+    category.onchange = () => {
+        if (!inventoryEditorState) inventoryEditorState = {};
+        inventoryEditorState.category = category.value;
+        rebuildEntityInventorySelectionList();
+    };
+    select.addEventListener('change', rebuildEntityInventoryPreview);
+    select.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const offset = e.deltaY > 0 ? 1 : -1;
+        const nextIndex = Math.min(Math.max(0, (select.selectedIndex >= 0 ? select.selectedIndex : 0) + offset), select.options.length - 1);
+        select.selectedIndex = nextIndex;
+        rebuildEntityInventoryPreview();
+    });
+
+    addBtn.onclick = () => {
+        const entity = inventoryEditorState && inventoryEditorState.entity;
+        if (!entity) return;
+        const categoryValue = category.value;
+        const options = getInventoryOptionList(categoryValue);
+        const option = options.find((opt) => String(opt.id) === select.value);
+        if (!option) return;
+        const qty = Math.max(1, Math.floor(Number(quantityInput.value) || 1));
+        if (categoryValue === 'block') {
+            entity.inventory = entity.inventory || {};
+            const key = String(option.id);
+            entity.inventory[key] = (entity.inventory[key] || 0) + qty;
+        } else {
+            entity.itemInventory = entity.itemInventory || {};
+            const key = option.id;
+            entity.itemInventory[key] = (entity.itemInventory[key] || 0) + qty;
+        }
+        updateEntityInventoryListDisplay();
+        quantityInput.value = '1';
+    };
+
+    clearBtn.onclick = () => {
+        const entity = inventoryEditorState && inventoryEditorState.entity;
+        if (!entity) return;
+        entity.inventory = {};
+        entity.itemInventory = {};
+        updateEntityInventoryListDisplay();
+    };
+
+    document.body.appendChild(panel);
+    return panel;
+}
+
+function rebuildEntityInventorySelectionList() {
+    const panel = ensureEntityInventoryPanel();
+    const select = panel.querySelector('#editor-inventory-select');
+    const category = panel.querySelector('#editor-inventory-category');
+    const options = getInventoryOptionList(category.value);
+    select.innerHTML = '';
+    options.forEach((opt) => {
+        const option = document.createElement('option');
+        option.value = opt.id;
+        option.textContent = opt.label;
+        select.appendChild(option);
+    });
+    if (select.options.length > 0) {
+        select.selectedIndex = 0;
+    }
+    rebuildEntityInventoryPreview();
+}
+
+function rebuildEntityInventoryPreview() {
+    if (!inventoryEditorState) return;
+    const panel = ensureEntityInventoryPanel();
+    const select = panel.querySelector('#editor-inventory-select');
+    const category = panel.querySelector('#editor-inventory-category');
+    const previewImg = panel.querySelector('#editor-inventory-preview-img');
+    const previewLabel = panel.querySelector('#editor-inventory-preview-label');
+    const options = getInventoryOptionList(category.value);
+    const selected = options.find((opt) => String(opt.id) === select.value);
+    if (selected && selected.textureUrl) {
+        previewImg.style.backgroundImage = `url("${selected.textureUrl}")`;
+    } else {
+        previewImg.style.backgroundImage = 'none';
+    }
+    previewLabel.textContent = selected ? selected.label : 'Selecione um item';
+}
+
+function getEntityInventoryEntries(entity) {
+    if (!entity) return [];
+    const entries = [];
+    if (entity.inventory) {
+        for (const [blockId, count] of Object.entries(entity.inventory)) {
+            const qty = Math.max(0, Math.floor(Number(count) || 0));
+            if (qty <= 0) continue;
+            const blockType = Object.values(BLOCK_TYPES).find((block) => String(block.id) === String(blockId));
+            if (!blockType) continue;
+            const textureKey = getBlockThumbnailTextureKey(blockType);
+            entries.push({
+                kind: 'block',
+                id: blockType.id,
+                name: blockType.name,
+                count: qty,
+                textureUrl: resolvePreviewTextureUrl(textureKey)
+            });
+        }
+    }
+    if (entity.itemInventory) {
+        for (const [itemId, count] of Object.entries(entity.itemInventory)) {
+            const qty = Math.max(0, Math.floor(Number(count) || 0));
+            if (qty <= 0) continue;
+            const itemDef = Object.values(ITEMS).find((item) => item.id === itemId);
+            if (!itemDef) continue;
+            entries.push({
+                kind: 'item',
+                id: itemDef.id,
+                name: itemDef.name,
+                count: qty,
+                textureUrl: resolvePreviewTextureUrl(itemDef.textureKey)
+            });
+        }
+    }
+    return entries.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function updateEntityInventoryListDisplay() {
+    const panel = document.getElementById('editor-entity-inventory-panel');
+    if (!panel || !inventoryEditorState) return;
+    const list = panel.querySelector('#editor-inventory-list');
+    list.innerHTML = '';
+    const entity = inventoryEditorState.entity;
+    const entries = getEntityInventoryEntries(entity);
+    if (entries.length === 0) {
+        const empty = document.createElement('div');
+        empty.textContent = 'Inventário vazio';
+        empty.style.opacity = '0.6';
+        list.appendChild(empty);
+        return;
+    }
+    entries.forEach((entry) => {
+        const row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.alignItems = 'center';
+        row.style.justifyContent = 'space-between';
+        row.style.padding = '6px';
+        row.style.border = '1px solid rgba(255,255,255,0.1)';
+        row.style.background = 'rgba(255,255,255,0.02)';
+        row.style.borderRadius = '4px';
+
+        const info = document.createElement('div');
+        info.style.flex = '1';
+        info.style.fontFamily = '"Courier New", monospace';
+        info.textContent = `${entry.name} x${entry.count}`;
+
+        const actions = document.createElement('div');
+        actions.style.display = 'flex';
+        actions.style.gap = '6px';
+        actions.style.flexWrap = 'wrap';
+
+        const removeOne = document.createElement('button');
+        removeOne.textContent = '-1';
+        removeOne.style.padding = '2px 10px';
+        removeOne.style.fontSize = '11px';
+        removeOne.style.fontFamily = '"Courier New", monospace';
+        removeOne.style.background = 'rgba(255,255,255,0.08)';
+        removeOne.style.border = '1px solid rgba(255,255,255,0.2)';
+        removeOne.style.color = 'white';
+        removeOne.style.cursor = 'pointer';
+        removeOne.onclick = () => {
+            adjustEntityInventoryCount(entity, entry.kind, entry.id, -1);
+            updateEntityInventoryListDisplay();
+        };
+
+        const removeAll = document.createElement('button');
+        removeAll.textContent = 'Remover tudo';
+        removeAll.style.padding = '2px 10px';
+        removeAll.style.fontSize = '11px';
+        removeAll.style.fontFamily = '"Courier New", monospace';
+        removeAll.style.background = 'rgba(255,255,255,0.08)';
+        removeAll.style.border = '1px solid rgba(255,255,255,0.2)';
+        removeAll.style.color = 'white';
+        removeAll.style.cursor = 'pointer';
+        removeAll.onclick = () => {
+            const delta = -entry.count;
+            adjustEntityInventoryCount(entity, entry.kind, entry.id, delta);
+            updateEntityInventoryListDisplay();
+        };
+
+        actions.appendChild(removeOne);
+        actions.appendChild(removeAll);
+
+        row.appendChild(info);
+        row.appendChild(actions);
+        list.appendChild(row);
+    });
+}
+
+function adjustEntityInventoryCount(entity, kind, id, delta) {
+    if (!entity) return;
+    if (kind === 'block') {
+        entity.inventory = entity.inventory || {};
+        const key = String(id);
+        const current = Math.max(0, Math.floor(Number(entity.inventory[key] || 0)));
+        const next = Math.max(0, current + delta);
+        if (next <= 0) {
+            delete entity.inventory[key];
+        } else {
+            entity.inventory[key] = next;
+        }
+    } else if (kind === 'item') {
+        entity.itemInventory = entity.itemInventory || {};
+        const current = Math.max(0, Math.floor(Number(entity.itemInventory[id] || 0)));
+        const next = Math.max(0, current + delta);
+        if (next <= 0) {
+            delete entity.itemInventory[id];
+        } else {
+            entity.itemInventory[id] = next;
+        }
+    }
+}
+
+function openEntityInventoryEditor(entity) {
+    if (!entity) return;
+    const panel = ensureEntityInventoryPanel();
+    inventoryEditorState = {
+        entity,
+        category: 'item'
+    };
+    const title = panel.querySelector('#editor-inventory-title');
+    title.textContent = `Inventário: ${entity.name || 'Entidade'}`;
+    const category = panel.querySelector('#editor-inventory-category');
+    category.value = 'item';
+    rebuildEntityInventorySelectionList();
+    updateEntityInventoryListDisplay();
+    panel.style.display = 'block';
+    if (document.pointerLockElement === document.body) {
+        document.exitPointerLock();
+    }
+}
+
+function closeEntityInventoryPanel() {
+    const panel = document.getElementById('editor-entity-inventory-panel');
+    if (!panel) return;
+    panel.style.display = 'none';
+    inventoryEditorState = null;
+    if (document.pointerLockElement !== document.body) {
+        document.body.requestPointerLock();
     }
 }
 
@@ -802,6 +1512,28 @@ function openEditorContextMenu(world, event) {
         addMenuItem(menu, 'Inspector (nova aba)', () => {
             openEntityInspectorWindow(entity);
         });
+        addMenuItem(menu, 'Editar inventário', () => openEntityInventoryEditor(entity));
+        addMenuItem(menu, 'Limpar inventário', () => {
+            clearEntityInventory(entity);
+        });
+        addMenuItem(menu, 'Clonar entidade', () => {
+            const player = world.getPlayerEntity();
+            if (!player) return;
+            const spawner = addEntitySpawner(player, {
+                npcTypeId: entity.npcTypeId,
+                inventory: entity.inventory,
+                itemInventory: entity.itemInventory,
+                selectedBlockTypeId: entity.selectedBlockType ? entity.selectedBlockType.id : null,
+                label: `${entity.name} (${getFactionName(entity.faction || 'neutral')})`
+            });
+            player.selectedItem = {
+                kind: 'entity',
+                action: 'spawn',
+                npcTypeId: spawner.npcTypeId,
+                spawnerConfig: spawner
+            };
+            updateCurrentItemLabel(world);
+        });
         if (entity.type === 'npc') {
             addMenuItem(menu, 'Venha ate aqui', () => {
                 startEditorMoveCommand(world, entity);
@@ -820,7 +1552,6 @@ function openEditorContextMenu(world, event) {
     } else if (target && target.kind === 'block') {
         addMenuItem(menu, 'Inspector bloco (nova aba)', () => openBlockInspectorWindow(target.block));
         addMenuItem(menu, 'Inspector world (nova aba)', () => openWorldInspectorWindow(world));
-        addMenuItem(menu, 'Criar bloco a partir deste', () => cloneBlockTypeFrom(world, target.block.type));
     } else {
         addMenuItem(menu, 'Inspector world (nova aba)', () => openWorldInspectorWindow(world));
         addMenuItem(menu, 'Fechar', () => {});
@@ -828,23 +1559,37 @@ function openEditorContextMenu(world, event) {
     if (world.mode === 'editor') {
         addMenuItem(menu, 'Pegar conteúdo', () => {
             const npcList = Object.values(NPC_TYPES).slice().sort((a, b) => a.name.localeCompare(b.name));
-            const npcOptions = npcList.map((npc) => ({
-                label: `${npc.name} (${getFactionName(npc.faction || 'neutral')})`,
-                value: npc.id
-            }));
+            const npcOptions = npcList.map((npc) => {
+                const textureKey = npc.texture || 'npc';
+                return {
+                    label: `${npc.name} (${getFactionName(npc.faction || 'neutral')})`,
+                    value: npc.id,
+                    faction: npc.faction || 'neutral',
+                    factionName: getFactionName(npc.faction || 'neutral'),
+                    textureKey,
+                    textureUrl: resolvePreviewTextureUrl(textureKey)
+                };
+            });
             const blockOptions = Object.values(BLOCK_TYPES)
                 .slice()
                 .sort((a, b) => a.name.localeCompare(b.name))
-                .map((blockType) => ({
-                    label: blockType.name,
-                    value: blockType.id
-                }));
+                .map((blockType) => {
+                    const textureKey = getBlockThumbnailTextureKey(blockType);
+                    return {
+                        label: blockType.name,
+                        value: blockType.id,
+                        textureKey,
+                        textureUrl: resolvePreviewTextureUrl(textureKey)
+                    };
+                });
             const itemOptions = Object.values(ITEMS)
                 .slice()
                 .sort((a, b) => a.name.localeCompare(b.name))
                 .map((itemDef) => ({
                     label: itemDef.name,
-                    value: itemDef.id
+                    value: itemDef.id,
+                    textureKey: itemDef.textureKey || null,
+                    textureUrl: resolvePreviewTextureUrl(itemDef.textureKey)
                 }));
             openUnifiedPickerPanel({
                 title: 'Selecionar tipo',
@@ -857,11 +1602,16 @@ function openEditorContextMenu(world, event) {
                     const player = world.getPlayerEntity();
                     if (!player) return;
                     if (categoryId === 'entity') {
-                        player.entitySpawners = Array.isArray(player.entitySpawners) ? player.entitySpawners : [];
-                        if (!player.entitySpawners.includes(option.value)) {
-                            player.entitySpawners.push(option.value);
-                        }
-                        player.selectedItem = { kind: 'entity', action: 'spawn', npcTypeId: option.value };
+                        const spawner = addEntitySpawner(player, {
+                            npcTypeId: option.value,
+                            label: option.label
+                        });
+                        player.selectedItem = {
+                            kind: 'entity',
+                            action: 'spawn',
+                            npcTypeId: spawner.npcTypeId,
+                            spawnerConfig: spawner
+                        };
                     } else if (categoryId === 'block') {
                         player.inventory = player.inventory || {};
                         player.inventory[option.value] = 999;
@@ -1296,18 +2046,21 @@ function buildSelectionList(world, player) {
     if (isEditor) {
         const spawners = Array.isArray(player.entitySpawners) ? player.entitySpawners : [];
         const npcList = spawners
-            .map((id) => getNpcTypeById(id))
+            .map((entry) => {
+                const npcType = getNpcTypeById(entry.npcTypeId);
+                return npcType && { npcType, entry };
+            })
             .filter(Boolean)
             .sort((a, b) => {
-                const ia = FACTION_ORDER.indexOf(a.faction || '');
-                const ib = FACTION_ORDER.indexOf(b.faction || '');
+                const ia = FACTION_ORDER.indexOf(a.npcType.faction || '');
+                const ib = FACTION_ORDER.indexOf(b.npcType.faction || '');
                 const fa = ia === -1 ? 999 : ia;
                 const fb = ib === -1 ? 999 : ib;
                 if (fa !== fb) return fa - fb;
-                return a.name.localeCompare(b.name);
+                return a.npcType.name.localeCompare(b.npcType.name);
             });
-        npcList.forEach((npcType) => {
-            list.push({ kind: 'entity', action: 'spawn', npcType });
+        npcList.forEach(({ npcType, entry }) => {
+            list.push({ kind: 'entity', action: 'spawn', npcType, spawner: entry });
         });
         if (npcList.length) {
             list.push({ kind: 'entity', action: 'despawn' });
@@ -1315,6 +2068,13 @@ function buildSelectionList(world, player) {
     }
     
     return list;
+}
+
+function clearEntityInventory(entity) {
+    if (!entity) return;
+    entity.inventory = {};
+    entity.itemInventory = {};
+    entity.selectedBlockType = null;
 }
 
 function getSelectionIndex(list, player) {
@@ -1361,7 +2121,8 @@ function applySelection(world, entry) {
         player.selectedItem = {
             kind: 'entity',
             action: entry.action,
-            npcTypeId: entry.npcType ? entry.npcType.id : null
+            npcTypeId: entry.npcType ? entry.npcType.id : null,
+            spawnerConfig: entry.spawner
         };
     }
     
@@ -1415,16 +2176,19 @@ function updateCurrentItemLabel(world) {
 
 function updateHud(world) {
     const hud = document.getElementById('hud');
-    if (!hud) return;
+    const hudText = document.getElementById('hud-text');
+    const hudPreview = document.getElementById('hud-item-preview');
+    if (!hud || !hudText || !hudPreview) return;
     if (world.mode !== 'game') {
         hud.style.display = 'none';
         return;
     }
-    hud.style.display = 'block';
+    hud.style.display = 'flex';
     
     const player = world.getPlayerEntity();
     if (!player) {
-        hud.textContent = 'HP: -\nItem: -\nCoins: -';
+        hudText.textContent = 'HP: -\nItem: -\nCoins: -';
+        hudPreview.style.backgroundImage = 'none';
         return;
     }
     
@@ -1454,7 +2218,24 @@ function updateHud(world) {
         }
     }
     
-    hud.textContent = `HP: ${hp}/${hpMax}\nItem: ${itemName} x${itemCount}`;
+    hudText.textContent = `HP: ${hp}/${hpMax}\nItem: ${itemName} x${itemCount}\nCoins: -`;
+
+    let previewKey = null;
+    if (player.selectedItem) {
+        if (player.selectedItem.kind === 'block') {
+            previewKey = getBlockThumbnailTextureKey(player.selectedBlockType);
+        } else if (player.selectedItem.kind === 'item') {
+            const itemDef = Object.values(ITEMS).find((item) => item.id === player.selectedItem.id);
+            previewKey = itemDef ? itemDef.textureKey : null;
+        } else if (player.selectedItem.kind === 'entity') {
+            const npcType = getNpcTypeById(player.selectedItem.npcTypeId);
+            previewKey = npcType ? npcType.texture : null;
+        }
+    } else if (player.selectedBlockType) {
+        previewKey = getBlockThumbnailTextureKey(player.selectedBlockType);
+    }
+    const previewUrl = resolvePreviewTextureUrl(previewKey);
+    hudPreview.style.backgroundImage = previewUrl ? `url("${previewUrl}")` : 'none';
 }
 
 function handleUseAction(world) {
@@ -1465,12 +2246,14 @@ function handleUseAction(world) {
         if (itemDef) {
             const count = player.itemInventory ? (player.itemInventory[itemDef.id] || 0) : 0;
             if (world.mode === 'editor' || count > 0) {
-                useItem(world, player, itemDef, 1);
-                if (itemDef.isConsumable && world.mode !== 'editor') {
-                    player.itemInventory[itemDef.id] = Math.max(0, count - 1);
+                const used = useItem(world, player, itemDef, 1);
+                if (used) {
+                    if (itemDef.isConsumable && world.mode !== 'editor') {
+                        player.itemInventory[itemDef.id] = Math.max(0, count - 1);
+                    }
+                    updateCurrentItemLabel(world);
+                    return true;
                 }
-                updateCurrentItemLabel(world);
-                return true;
             }
         }
         return false;
@@ -1608,9 +2391,14 @@ function secondaryAction(world) {
         if (!selection) return;
         const targetPos = world.ui.targetBlockPosition || { x: player.x, y: player.y, z: player.z };
         if (selection.kind === 'entity' && selection.action === 'spawn') {
-            const npcType = getNpcTypeById(selection.npcTypeId);
+            const npcType = getNpcTypeById(selection.npcTypeId || (selection.spawnerConfig && selection.spawnerConfig.npcTypeId));
             if (npcType) {
-                createNpcEntity(world, npcType, { x: targetPos.x, y: targetPos.y + 0.5, z: targetPos.z });
+                const spawnerConfig = selection.spawnerConfig || selection.spawner;
+                createNpcEntity(world, npcType, { x: targetPos.x, y: targetPos.y + 0.5, z: targetPos.z }, null, null, {
+                    inventory: spawnerConfig ? spawnerConfig.inventory : null,
+                    itemInventory: spawnerConfig ? spawnerConfig.itemInventory : null,
+                    selectedBlockTypeId: spawnerConfig ? spawnerConfig.selectedBlockTypeId : null
+                });
             }
         } else if (selection.kind === 'item') {
             spawnItemDrop(world, selection.id, 1, { x: targetPos.x, y: targetPos.y + 0.5, z: targetPos.z });

@@ -10,6 +10,25 @@ function getBlockTextureKey(blockType) {
     return null;
 }
 
+const ITEM_USE_COOLDOWN_MS = 1500;
+
+function getNow() {
+    return typeof performance !== 'undefined' && performance.now
+        ? performance.now()
+        : Date.now();
+}
+
+function canUseItemNow(entity) {
+    if (!entity) return false;
+    const last = entity._lastItemUseTime || 0;
+    return getNow() - last >= ITEM_USE_COOLDOWN_MS;
+}
+
+function markItemUse(entity) {
+    if (!entity) return;
+    entity._lastItemUseTime = getNow();
+}
+
 function createBillboardMesh(texture, baseHeight = 0.5) {
     let aspect = 1;
     if (texture && texture.image && texture.image.width && texture.image.height) {
@@ -166,16 +185,8 @@ export function updateItems(world) {
             } else if (item.kind === 'item') {
                 const itemDef = Object.values(ITEMS).find(it => it.id === item.itemId);
                 if (itemDef) {
-                    if (itemDef.use) {
-                        itemDef.use(world, entity, item.amount);
-                        if (!itemDef.isConsumable && !itemDef.handlesInventory) {
-                            entity.itemInventory = entity.itemInventory || {};
-                            entity.itemInventory[itemDef.id] = (entity.itemInventory[itemDef.id] || 0) + item.amount;
-                        }
-                    } else {
-                        entity.itemInventory = entity.itemInventory || {};
-                        entity.itemInventory[itemDef.id] = (entity.itemInventory[itemDef.id] || 0) + item.amount;
-                    }
+                    entity.itemInventory = entity.itemInventory || {};
+                    entity.itemInventory[itemDef.id] = (entity.itemInventory[itemDef.id] || 0) + item.amount;
                 }
             }
             
@@ -188,11 +199,11 @@ export function updateItems(world) {
 
 export function useItem(world, entity, itemDef, amount = 1) {
     if (!itemDef || !entity) return false;
-    if (itemDef.use) {
-        itemDef.use(world, entity, amount);
-        return true;
-    }
-    return false;
+    if (!itemDef.use) return false;
+    if (!canUseItemNow(entity)) return false;
+    markItemUse(entity);
+    itemDef.use(world, entity, amount);
+    return true;
 }
 
 function isItemColliding(world, position) {
