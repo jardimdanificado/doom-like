@@ -57,10 +57,10 @@ CATEGORY_OVERRIDES: Dict[str, Dict] = {
     'demihumanoids/merfolk': {'faction': 'aquatic', 'maxHP': 180, 'height': 1.4},
     'demihumanoids/naga': {'faction': 'demon', 'maxHP': 230},
     'demihumanoids/taurs': {'faction': 'beast', 'maxHP': 220},
-    'mutantbeast': {'faction': 'beast', 'maxHP': 240},
+    'mutantbeast': {'faction': 'mutant_beast', 'maxHP': 240},
     'nonliving': {'faction': 'construct', 'maxHP': 260, 'isHostile': False, 'itemDrops': {}},
     'nonliving/shadows': {'faction': 'undead', 'maxHP': 200},
-    'panlord': {'faction': 'demon', 'maxHP': 280},
+    'panlord': {'faction': 'panlord', 'maxHP': 280},
     'player': {'faction': 'player', 'isHostile': False},
     'sprint': {'faction': 'demon', 'maxHP': 250},
     'statues': {'faction': 'construct', 'maxHP': 240, 'isHostile': False, 'itemDrops': {}},
@@ -73,7 +73,7 @@ CATEGORY_OVERRIDES: Dict[str, Dict] = {
     'undead/skeletons': {'faction': 'undead', 'maxHP': 210},
     'undead/spectrals': {'faction': 'undead', 'maxHP': 180},
     'undead/zombies': {'faction': 'undead', 'maxHP': 200},
-    'vault': {'faction': 'guard', 'maxHP': 260},
+    'vault': {'faction': 'vault', 'maxHP': 260},
 }
 
 
