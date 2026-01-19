@@ -2,6 +2,14 @@ import CONFIG from '../data/config/config.js';
 import BLOCK_TYPES from '../data/config/blocks.js';
 import ITEMS from '../data/config/items.js';
 import { spawnBlockDrop, spawnItemDrop } from './item.js';
+import {
+    applyTimedNeedModifier,
+    getEntityDamageBonus,
+    getEntityDamageReduction,
+    getEntityThrowDistanceBonus,
+    getEntityThrowSpeedBonus,
+    getEntityThrowStrengthBonus
+} from './survival.js';
 
 const BLOOD_SPLASH_KEYS = [
     'blood_red',
@@ -367,6 +375,9 @@ function applyEntityHitEffects(world, entity, direction) {
     if (!isFloor || direction.y >= -0.35) {
         spawnBloodDecal(world, hit.point, normal, isFloor);
     }
+    if (block.type && block.type.debuffOnHit) {
+        applyTimedNeedModifier(entity, block.type.debuffOnHit);
+    }
 }
 
 function applyBlockHitEffects(world, block, impactBlockType = null) {
@@ -495,8 +506,10 @@ export function createProjectile(world) {
     }
     ////updateInventoryDisplay(world);
     
-    const damage = player.selectedBlockType.breakDamage;
-    const speed = player.selectedBlockType.bulletSpeed || 0.5;
+    const damage = (player.selectedBlockType.breakDamage || 0) + getEntityDamageBonus(player) + getEntityThrowStrengthBonus(player);
+    const speed = (player.selectedBlockType.bulletSpeed || 0.5) + getEntityThrowSpeedBonus(player);
+    const lifetimeBase = player.selectedBlockType.bulletLifetime || 40;
+    const lifetime = Math.max(10, lifetimeBase + getEntityThrowDistanceBonus(player));
     
     const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
     const materials = createBlockMaterials(world, player.selectedBlockType);
@@ -514,6 +527,8 @@ export function createProjectile(world) {
         shooter: player,
         blockType: player.selectedBlockType
     };
+    projectile.life = lifetime;
+    projectile.maxLife = lifetime;
     
     world._internal.scene.add(mesh);
     world.projectiles.push(projectile);
@@ -629,6 +644,12 @@ export function updateProjectiles(world) {
             }
         }
 
+        proj.life = (typeof proj.life === 'number' ? proj.life : proj.maxLife || 1) - 1;
+        if (proj.life <= 0) {
+            world._internal.scene.remove(proj.mesh);
+            world.projectiles.splice(i, 1);
+            continue;
+        }
         const gravityScale = typeof proj.gravityScale === 'number' ? proj.gravityScale : 0.6;
         const drag = typeof proj.drag === 'number' ? proj.drag : 0.985;
         proj.velocity.y -= CONFIG.GRAVITY * gravityScale;
@@ -650,8 +671,10 @@ export function updateProjectiles(world) {
             const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
             
             if (distance < 0.5) {
-                entity.hp -= proj.damage;
-                console.log(`${entity.name} levou ${proj.damage} de dano! HP: ${entity.hp}/${entity.maxHP}`);
+                const reduction = getEntityDamageReduction(entity);
+                const netDamage = Math.max(0, proj.damage - reduction);
+                entity.hp -= netDamage;
+                console.log(`${entity.name} levou ${netDamage} de dano! HP: ${entity.hp}/${entity.maxHP}`);
 
                 if (proj.shooter && proj.shooter !== entity) {
                     entity.alertTimer = 90;
@@ -747,15 +770,16 @@ function dropEntityInventory(world, entity) {
         }
     }
     
-    if (entity.itemInventory) {
-        for (const [itemId, count] of Object.entries(entity.itemInventory)) {
-            const qty = Math.max(0, Math.floor(Number(count) || 0));
-            if (qty === 0) continue;
-            for (let i = 0; i < qty; i++) {
-                drops.push({ kind: 'item', itemId });
+        if (entity.itemInventory) {
+            for (const [itemId, count] of Object.entries(entity.itemInventory)) {
+                const qty = Math.max(0, Math.floor(Number(count) || 0));
+                if (qty === 0) continue;
+                const itemDef = ITEMS[itemId];
+                for (let i = 0; i < qty; i++) {
+                    drops.push({ kind: 'item', itemId });
+                }
             }
         }
-    }
     
     if (drops.length === 0) return;
     

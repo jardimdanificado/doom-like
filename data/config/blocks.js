@@ -53,7 +53,7 @@ const DOOR_USE = function(world, block, creature) {
     }
 };
 
-export default {
+const BLOCK_TYPES = {
     STONE: {
         id: 1,
         name: 'Pedra',
@@ -13652,4 +13652,125 @@ export default {
             all: 'plant_bush_4',
         },
     },
+    ENV_INFERNAL_BRICK: {
+        id: 1001,
+        name: 'Tijolo Infernal',
+        solid: true,
+        maxHP: 420,
+        breakDamage: 18,
+        bulletSpeed: 0.4,
+        bulletLifetime: 60,
+        isFloor: false,
+        opacity: 1,
+        droppable: true,
+        textures: {
+            all: 'wall_abyss_lightred_4',
+        },
+    },
+    ENV_ABYSSAL_CRYSTAL: {
+        id: 1002,
+        name: 'Cristal Abissal',
+        solid: true,
+        maxHP: 520,
+        breakDamage: 22,
+        bulletSpeed: 0.45,
+        bulletLifetime: 70,
+        isFloor: false,
+        opacity: 0.85,
+        droppable: true,
+        textures: {
+            all: 'wall_abyss_magenta_3',
+        },
+    },
+    ENV_LUMINOUS_VINE: {
+        id: 1003,
+        name: 'Vinha Luminosa',
+        solid: false,
+        maxHP: 60,
+        breakDamage: 8,
+        bulletSpeed: 0.32,
+        bulletLifetime: 48,
+        isFloor: false,
+        opacity: 1,
+        droppable: true,
+        render: 'cross',
+        textures: {
+            all: 'wall_abyss_lightblue_4',
+        },
+    },
 };
+
+const BLOCK_DEBUFF_RULES = [
+    {
+        pattern: /wall_abyss|floor_abyss/,
+        effect: {
+            id: 'block_debuff_abyss',
+            duration: 8,
+            modifiers: {
+                speed: -0.08,
+                jump: -0.04,
+                hungerDecay: 0.01,
+                regen: -0.04
+            }
+        }
+    },
+    {
+        pattern: /wall_hell|floor_infernal|wall_infernal/,
+        effect: {
+            id: 'block_debuff_hell',
+            duration: 10,
+            modifiers: {
+                speed: -0.06,
+                damageReduction: -3,
+                thirstDecay: 0.015
+            }
+        }
+    },
+    {
+        pattern: /floor_ice|ice/,
+        effect: {
+            id: 'block_debuff_ice',
+            duration: 6,
+            modifiers: {
+                speed: -0.12,
+                jump: -0.06,
+                thirstDecay: 0.01
+            }
+        }
+    }
+];
+
+Object.values(BLOCK_TYPES).forEach((block) => {
+    if (!block) return;
+    if (typeof block.breakDamage !== 'number') {
+        const hp = typeof block.maxHP === 'number' ? block.maxHP : 10;
+        block.breakDamage = Math.max(1, Math.round(hp / 8));
+    }
+    const textureKey = block.textures ? (block.textures.all || block.textures.top || '') : '';
+    if (typeof textureKey === 'string') {
+        if (textureKey.includes('abyss')) {
+            block.breakDamage = Math.max(block.breakDamage, 12);
+        }
+        if (textureKey.includes('hell') || textureKey.includes('infernal')) {
+            block.breakDamage = Math.max(block.breakDamage, 16);
+        }
+        if (textureKey.includes('blood')) {
+            block.breakDamage = Math.max(block.breakDamage, 10);
+        }
+        if (textureKey.includes('ice')) {
+            block.breakDamage = Math.max(block.breakDamage, 6);
+        }
+    }
+    if (block.isFloor && block.breakDamage < 2) {
+        block.breakDamage = 2;
+    }
+    const rule = BLOCK_DEBUFF_RULES.find((entry) => entry.pattern.test(textureKey));
+    if (rule) {
+        block.debuffOnHit = {
+            ...rule.effect,
+            id: `${rule.effect.id}_${block.id}`
+        };
+    }
+});
+
+export default BLOCK_TYPES;

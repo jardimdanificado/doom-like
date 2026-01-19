@@ -3,6 +3,7 @@ import BLOCK_TYPES from '../data/config/blocks.js';
 import { checkCollision, getGroundLevel } from './collision.js';
 import { getFactionRelation } from '../data/config/factions.js';
 import { alertEntitiesFromShot } from './bullet.js';
+import { updateEntityNeeds, getEntityMoveSpeed, getEntityDamageBonus } from './survival.js';
 import ITEMS from '../data/config/items.js';
 import { useItem } from './item.js';
 
@@ -455,6 +456,9 @@ export function updateEntity(world, entity) {
         }
     }
     
+    // Atualiza fome e sede
+    updateEntityNeeds(entity);
+
     // Física Y para TODAS as entidades
     if (!noClip)
         applyPhysics(world, entity);
@@ -633,9 +637,10 @@ export function updatePlayerControlled(world, entity) {
     let moveX = 0;
     let moveZ = 0;
     
+    const baseSpeed = getEntityMoveSpeed(entity);
     const speed = entity.isCrouching 
-        ? CONFIG.MOVE_SPEED * CONFIG.CROUCH_SPEED_MULTIPLIER 
-        : CONFIG.MOVE_SPEED;
+        ? baseSpeed * CONFIG.CROUCH_SPEED_MULTIPLIER 
+        : baseSpeed;
     
     if (keys['KeyW']) {
         moveX += forward.x * speed;
@@ -729,9 +734,10 @@ export function updateAIControlled(world, entity) {
     }
     
     // Move em direção ao alvo
+    const baseSpeed = getEntityMoveSpeed(entity);
     const speed = entity.isCrouching 
-        ? CONFIG.MOVE_SPEED * CONFIG.CROUCH_SPEED_MULTIPLIER 
-        : CONFIG.MOVE_SPEED;
+        ? baseSpeed * CONFIG.CROUCH_SPEED_MULTIPLIER 
+        : baseSpeed;
     
     const moveX = (dx / distance) * speed;
     const moveZ = (dz / distance) * speed;
@@ -1003,9 +1009,10 @@ export function updateHostileMovement(world, entity) {
     }
     
     // Move em direção ao alvo
+    const baseSpeed = getEntityMoveSpeed(entity);
     const speed = entity.isCrouching 
-        ? CONFIG.MOVE_SPEED * CONFIG.CROUCH_SPEED_MULTIPLIER 
-        : CONFIG.MOVE_SPEED;
+        ? baseSpeed * CONFIG.CROUCH_SPEED_MULTIPLIER 
+        : baseSpeed;
     
     const moveX = (dx / distance) * speed;
     const moveZ = (dz / distance) * speed;
@@ -1048,7 +1055,7 @@ export function shootProjectileFromEntity(world, shooter, target) {
         shooter.inventory[shooter.selectedBlockType.id]--;
     }
     
-    const damage = shooter.selectedBlockType.breakDamage;
+    const damage = (shooter.selectedBlockType.breakDamage || 0) + getEntityDamageBonus(shooter);
     const speed = shooter.selectedBlockType.bulletSpeed || 0.5;
     
     const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
