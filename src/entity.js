@@ -32,6 +32,27 @@ const HP_ICONS = [
 const CONSUMABLE_HEALTH_RATIO = 0.6;
 const CONSUMABLE_ITEMS = Object.values(ITEMS).filter((item) => item.isConsumable);
 
+function getBestItemWeapon(entity) {
+    if (!entity || !entity.itemInventory) return null;
+    let best = null;
+    let bestScore = -Infinity;
+    for (const itemDef of Object.values(ITEMS)) {
+        if (typeof itemDef.projectileSpeed !== 'number') continue;
+        const count = entity.itemInventory[itemDef.id] || 0;
+        if (count <= 0) continue;
+        const damage = typeof itemDef.projectileDamage === 'number'
+            ? itemDef.projectileDamage
+            : (typeof itemDef.damage === 'number' ? itemDef.damage : 0);
+        const speed = itemDef.projectileSpeed;
+        const score = damage * 1.5 + speed;
+        if (score > bestScore) {
+            bestScore = score;
+            best = itemDef;
+        }
+    }
+    return best;
+}
+
 function getBestConsumableInInventory(entity) {
     if (!entity.itemInventory) return null;
     let best = null;
@@ -63,6 +84,39 @@ function tryUseConsumable(world, entity) {
         return true;
     }
     return false;
+}
+
+function createProjectileSprite(world, textureKey, size = 0.35) {
+    const texture = textureKey ? world._internal.blockTextures[textureKey] : null;
+    let aspect = 1;
+    if (texture && texture.image && texture.image.width && texture.image.height) {
+        aspect = texture.image.width / texture.image.height;
+    }
+    const geometry = new THREE.PlaneGeometry(size * aspect, size);
+    const material = new THREE.MeshBasicMaterial({
+        map: texture || null,
+        color: 0xffffff,
+        transparent: true,
+        alphaTest: 0.1,
+        side: THREE.DoubleSide
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.userData.faceCamera = true;
+    return mesh;
+}
+
+function createItemProjectileMesh(world, itemDef) {
+    if (!itemDef) {
+        const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+        return new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ color: 0xffffff }));
+    }
+    const textureKey = itemDef.projectileTextureKey || itemDef.textureKey || null;
+    if (textureKey) {
+        const size = typeof itemDef.projectileSize === 'number' ? itemDef.projectileSize : 0.22;
+        return createProjectileSprite(world, textureKey, size);
+    }
+    const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+    return new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ color: 0xffffff }));
 }
 
 
@@ -1033,6 +1087,48 @@ export function updateHostileMovement(world, entity) {
 }
 
 export function shootProjectileFromEntity(world, shooter, target) {
+    const itemWeapon = getBestItemWeapon(shooter);
+    if (itemWeapon) {
+        const count = shooter.itemInventory ? (shooter.itemInventory[itemWeapon.id] || 0) : 0;
+        if (count <= 0) return;
+        const damage = typeof itemWeapon.projectileDamage === 'number'
+            ? itemWeapon.projectileDamage
+            : (typeof itemWeapon.damage === 'number' ? itemWeapon.damage : 0);
+        const speed = itemWeapon.projectileSpeed;
+        const mesh = createItemProjectileMesh(world, itemWeapon);
+        const shooterHeight = shooter.isCrouching
+            ? CONFIG.ENTITY_HEIGHT_CROUCHED * 0.8
+            : CONFIG.ENTITY_HEIGHT * 0.8;
+        mesh.position.set(shooter.x, shooter.y + shooterHeight, shooter.z);
+
+        const direction = new THREE.Vector3(
+            target.x - shooter.x,
+            target.y + CONFIG.ENTITY_HEIGHT * 0.5 - (shooter.y + shooterHeight),
+            target.z - shooter.z
+        );
+        direction.normalize();
+
+        const projectile = {
+            mesh: mesh,
+            velocity: direction.multiplyScalar(speed),
+            damage: damage,
+            shooter: shooter,
+            itemDef: itemWeapon,
+            faceCamera: Boolean(mesh.userData && mesh.userData.faceCamera),
+            gravityScale: typeof itemWeapon.projectileGravityScale === 'number' ? itemWeapon.projectileGravityScale : 0,
+            drag: typeof itemWeapon.projectileDrag === 'number' ? itemWeapon.projectileDrag : 1
+        };
+
+        world._internal.scene.add(mesh);
+        world.projectiles.push(projectile);
+        if (count < 999) {
+            shooter.itemInventory[itemWeapon.id] = Math.max(0, count - 1);
+        }
+        alertEntitiesFromShot(world, shooter);
+        console.log(`${shooter.name} atirou com ${itemWeapon.name || itemWeapon.id}!`);
+        return;
+    }
+
     if (!shooter.inventory) return;
     if (!shooter.selectedBlockType || shooter.selectedBlockType.droppable === false) {
         ensureEntityHasWeapon(shooter);

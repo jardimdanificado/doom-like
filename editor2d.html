@@ -187,7 +187,6 @@
         <div class="row">
           <select id="tool-mode">
             <option value="block">Bloco</option>
-            <option value="floor">Chão (isFloor)</option>
             <option value="npc">Entidade (NPC)</option>
             <option value="item">Item (drop)</option>
             <option value="erase">Apagar</option>
@@ -232,6 +231,31 @@
       <div class="card" style="margin-top: 10px;">
         <h2>Paleta</h2>
         <div class="palette" id="palette"></div>
+      </div>
+
+      <div class="card" style="margin-top: 10px;">
+        <h2>Inventário</h2>
+        <label>Entidade</label>
+        <select id="inv-target"></select>
+
+        <label>Categoria</label>
+        <select id="inv-category">
+          <option value="block">Blocos</option>
+          <option value="item">Itens</option>
+        </select>
+
+        <div class="row" style="margin-top: 6px;">
+          <select id="inv-item"></select>
+          <input id="inv-qty" type="number" value="1" min="1" />
+        </div>
+        <div class="btnbar" style="margin-top: 8px;">
+          <button class="good" id="inv-add">Adicionar</button>
+          <button class="bad" id="inv-remove">Remover</button>
+          <button id="inv-clear">Limpar</button>
+        </div>
+
+        <div class="status" id="inv-status" style="margin-top: 10px;">Selecione uma entidade.</div>
+        <div class="status" id="inv-list" style="margin-top: 8px;"></div>
       </div>
 
       <div class="card" style="margin-top: 10px;">
@@ -298,7 +322,7 @@
     const itemList = Object.values(ITEMS)
       .slice()
       .sort((a,b) => (a.name||'').localeCompare(b.name||''))
-      .map(it => ({ kind: 'item', id: it.id, label: it.name, it, thumbKey: it.textureKey || null }));
+      .map(it => ({ kind: 'item', id: it.id, label: it.name, it, thumbKey: it.uiTextureKey || it.textureKey || null }));
 
     const state = {
       toolMode: 'block',
@@ -343,6 +367,20 @@
     const layerEl = $('layer-y');
     const zoomEl = $('zoom');
     const paintShapeEl = $('paint-shape');
+    const invTargetEl = $('inv-target');
+    const invCategoryEl = $('inv-category');
+    const invItemEl = $('inv-item');
+    const invQtyEl = $('inv-qty');
+    const invAddEl = $('inv-add');
+    const invRemoveEl = $('inv-remove');
+    const invClearEl = $('inv-clear');
+    const invStatusEl = $('inv-status');
+    const invListEl = $('inv-list');
+
+    const inventoryState = {
+      targetKey: 'player',
+      category: 'item',
+    };
 
     function renderPalette() {
       paletteEl.innerHTML = '';
@@ -396,6 +434,198 @@
     paintShapeEl.addEventListener('change', () => { state.paintShape = String(paintShapeEl.value||'brush'); state.rectStart = null; state.rectEnd = null; draw(); });
     searchEl.addEventListener('input', renderPalette);
 
+    function getNpcEntities() {
+      return state.map.entities.filter(e => e && e.type === 'npc');
+    }
+
+    function getNpcLabel(npc) {
+      const npcType = Object.values(NPC_TYPES).find(n => n.id === npc.npcTypeId);
+      return npc.name || (npcType ? npcType.name : 'NPC');
+    }
+
+    function getInventoryTarget() {
+      if (inventoryState.targetKey === 'player') {
+        if (!state.map.player) state.map.player = { x: 7.5, y: 2, z: 7.5, yaw: 0, pitch: 0 };
+        state.map.player.inventory = state.map.player.inventory || {};
+        state.map.player.itemInventory = state.map.player.itemInventory || {};
+        return { entity: state.map.player, label: 'Player', isPlayer: true };
+      }
+      const npcList = getNpcEntities();
+      const idx = Number(String(inventoryState.targetKey).replace('npc-', ''));
+      const npc = npcList[idx];
+      if (!npc) return null;
+      npc.inventory = npc.inventory || {};
+      npc.itemInventory = npc.itemInventory || {};
+      return { entity: npc, label: getNpcLabel(npc), isPlayer: false };
+    }
+
+    function renderInventoryTargets() {
+      const npcList = getNpcEntities();
+      invTargetEl.innerHTML = '';
+
+      const playerOption = document.createElement('option');
+      playerOption.value = 'player';
+      playerOption.textContent = 'Player';
+      invTargetEl.appendChild(playerOption);
+
+      npcList.forEach((npc, idx) => {
+        const opt = document.createElement('option');
+        opt.value = `npc-${idx}`;
+        opt.textContent = `${getNpcLabel(npc)} (NPC ${idx + 1})`;
+        invTargetEl.appendChild(opt);
+      });
+
+      if (inventoryState.targetKey !== 'player' && !invTargetEl.querySelector(`option[value="${inventoryState.targetKey}"]`)) {
+        inventoryState.targetKey = 'player';
+      }
+      invTargetEl.value = inventoryState.targetKey;
+    }
+
+    function renderInventoryOptions() {
+      const category = invCategoryEl.value;
+      invItemEl.innerHTML = '';
+      const options = category === 'block' ? blockList : itemList;
+      for (const entry of options) {
+        const opt = document.createElement('option');
+        opt.value = String(entry.id);
+        opt.textContent = entry.label || String(entry.id);
+        invItemEl.appendChild(opt);
+      }
+    }
+
+    function renderInventoryList() {
+      const target = getInventoryTarget();
+      invListEl.innerHTML = '';
+      if (!target) {
+        invStatusEl.textContent = 'Selecione uma entidade válida.';
+        return;
+      }
+
+      invStatusEl.textContent = `Editando: ${target.label}`;
+      const entries = [];
+
+      if (target.entity.inventory) {
+        for (const [blockId, count] of Object.entries(target.entity.inventory)) {
+          const qty = Math.max(0, Math.floor(Number(count) || 0));
+          if (!qty) continue;
+          const blockType = Object.values(BLOCK_TYPES).find(b => String(b.id) === String(blockId));
+          entries.push({
+            kind: 'block',
+            id: blockId,
+            name: blockType ? blockType.name : `Bloco ${blockId}`,
+            count: qty
+          });
+        }
+      }
+
+      if (target.entity.itemInventory) {
+        for (const [itemId, count] of Object.entries(target.entity.itemInventory)) {
+          const qty = Math.max(0, Math.floor(Number(count) || 0));
+          if (!qty) continue;
+          const itemDef = Object.values(ITEMS).find(i => String(i.id) === String(itemId));
+          entries.push({
+            kind: 'item',
+            id: itemId,
+            name: itemDef ? itemDef.name : `Item ${itemId}`,
+            count: qty
+          });
+        }
+      }
+
+      if (!entries.length) {
+        const empty = document.createElement('div');
+        empty.textContent = 'Inventário vazio.';
+        invListEl.appendChild(empty);
+        return;
+      }
+
+      entries.sort((a,b) => a.name.localeCompare(b.name));
+      for (const entry of entries) {
+        const row = document.createElement('div');
+        row.style.display = 'grid';
+        row.style.gridTemplateColumns = '1fr auto auto auto';
+        row.style.gap = '6px';
+        row.style.alignItems = 'center';
+        row.style.padding = '4px 0';
+
+        const label = document.createElement('div');
+        label.textContent = `${entry.name} x${entry.count}`;
+        label.style.fontSize = '12px';
+
+        const minus = document.createElement('button');
+        minus.textContent = '-';
+        minus.style.padding = '2px 8px';
+        minus.addEventListener('click', () => adjustInventory(entry.kind, entry.id, -1));
+
+        const plus = document.createElement('button');
+        plus.textContent = '+';
+        plus.style.padding = '2px 8px';
+        plus.addEventListener('click', () => adjustInventory(entry.kind, entry.id, 1));
+
+        const remove = document.createElement('button');
+        remove.textContent = 'x';
+        remove.style.padding = '2px 8px';
+        remove.addEventListener('click', () => adjustInventory(entry.kind, entry.id, -entry.count));
+
+        row.appendChild(label);
+        row.appendChild(minus);
+        row.appendChild(plus);
+        row.appendChild(remove);
+        invListEl.appendChild(row);
+      }
+    }
+
+    function adjustInventory(kind, id, delta) {
+      const target = getInventoryTarget();
+      if (!target) return;
+      const store = kind === 'block' ? target.entity.inventory : target.entity.itemInventory;
+      const key = String(id);
+      const current = Math.max(0, Math.floor(Number(store[key] || 0)));
+      const next = Math.max(0, current + delta);
+      if (next <= 0) {
+        delete store[key];
+      } else {
+        store[key] = next;
+      }
+      renderInventoryList();
+    }
+
+    invTargetEl.addEventListener('change', () => {
+      inventoryState.targetKey = invTargetEl.value;
+      renderInventoryList();
+    });
+
+    invCategoryEl.addEventListener('change', () => {
+      inventoryState.category = invCategoryEl.value;
+      renderInventoryOptions();
+    });
+
+    invAddEl.addEventListener('click', () => {
+      const target = getInventoryTarget();
+      if (!target) return;
+      const qty = Math.max(1, Math.floor(Number(invQtyEl.value || 1)));
+      const id = invItemEl.value;
+      const kind = invCategoryEl.value === 'block' ? 'block' : 'item';
+      adjustInventory(kind, id, qty);
+    });
+
+    invRemoveEl.addEventListener('click', () => {
+      const target = getInventoryTarget();
+      if (!target) return;
+      const qty = Math.max(1, Math.floor(Number(invQtyEl.value || 1)));
+      const id = invItemEl.value;
+      const kind = invCategoryEl.value === 'block' ? 'block' : 'item';
+      adjustInventory(kind, id, -qty);
+    });
+
+    invClearEl.addEventListener('click', () => {
+      const target = getInventoryTarget();
+      if (!target) return;
+      target.entity.inventory = {};
+      target.entity.itemInventory = {};
+      renderInventoryList();
+    });
+
     // Map helpers
     function recalcBounds() {
       let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
@@ -424,13 +654,15 @@
       // padding
       state.view = { minX: minX - 2, minZ: minZ - 2, maxX: maxX + 2, maxZ: maxZ + 2 };
     }
+    const onionDepth = 2;
+    const onionAlpha = [0.28, 0.16];
+
     function getLayerY() {
       // Coordenadas Y no formato do seu mapa:
       // - blocos: (camada + 0.5)
       // - chao:  -0.5 (isFloor=true)
       // - NPCs:  y inteiro (0,1,2...)
       // - itens: y levemente acima do piso (camada + 0.2)
-      if (state.toolMode === 'floor') return -0.5;
       if (state.toolMode === 'block') return state.layerY + 0.5;
       if (state.toolMode === 'npc') return state.layerY;
       if (state.toolMode === 'item') return state.layerY + 0.2;
@@ -460,11 +692,10 @@
     }
     function eraseAtCell(x,z) {
       // 1) Sempre remove bloco da camada de bloco atual (camada+0.5)
-      //    e, se estiver no modo chao, remove o chao (y=-0.5).
+      //    e também remove o chão (y=-0.5).
       const blockY = state.layerY + 0.5;
       const floorY = -0.5;
-      const yToErase = (state.toolMode === 'floor') ? floorY : blockY;
-      state.map.blocks = state.map.blocks.filter(b => !(b.x===x && b.z===z && b.y===yToErase));
+      state.map.blocks = state.map.blocks.filter(b => !(b.x===x && b.z===z && (b.y===blockY || b.y===floorY)));
 
       // 2) Remove NPC/Item SOMENTE do andar atual (state.layerY).
       const cx = x + 0.5;
@@ -473,6 +704,8 @@
 
       state.map.entities = state.map.entities.filter(e => !((Math.abs((e.x??0)-cx)<0.51) && (Math.abs((e.z??0)-cz)<0.51) && (layerFromWorldY(e.y)===targetLayer)));
       state.map.items = state.map.items.filter(it => !((Math.abs((it.x??0)-cx)<0.51) && (Math.abs((it.z??0)-cz)<0.51) && (layerFromWorldY(it.y)===targetLayer)));
+      renderInventoryTargets();
+      renderInventoryList();
     }
 
     // Canvas sizing
@@ -524,13 +757,9 @@
 
       const blockLayerY = state.layerY + 0.5;
       const floorLayerY = -0.5;
-      const showFloor = (state.toolMode === 'floor');
-      const drawY = showFloor ? floorLayerY : blockLayerY;
       const activeEntityLayer = state.layerY;
 
-      // draw blocks on current layer
-      for (const b of state.map.blocks) {
-        if (b.y !== drawY) continue;
+      function drawBlockCell(b, alpha = 1) {
         const bt = Object.values(BLOCK_TYPES).find(t => t.id === b.typeId);
         const txKey = bt ? getBlockThumbKey(bt) : null;
         const img = txKey ? loadImg(txKey) : null;
@@ -540,16 +769,40 @@
         const px = ox + gx * cell;
         const pz = oz + gz * cell;
 
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
         if (img && img.complete && img.naturalWidth) {
           ctx.drawImage(img, px, pz, cell, cell);
         } else {
           ctx.fillStyle = 'rgba(100,116,139,0.55)';
           ctx.fillRect(px, pz, cell, cell);
         }
-
-        // subtle border
         ctx.strokeStyle = 'rgba(255,255,255,0.10)';
         ctx.strokeRect(px + 0.5, pz + 0.5, cell - 1, cell - 1);
+        ctx.restore();
+      }
+
+      // floor always visible (low alpha)
+      for (const b of state.map.blocks) {
+        if (b.isFloor || b.y === floorLayerY) {
+          drawBlockCell(b, 0.35);
+        }
+      }
+
+      // onion skin: layers below current
+      for (let i = 1; i <= onionDepth; i++) {
+        const layerY = (state.layerY - i) + 0.5;
+        const alpha = onionAlpha[i - 1] ?? 0.12;
+        for (const b of state.map.blocks) {
+          if (b.y !== layerY) continue;
+          drawBlockCell(b, alpha);
+        }
+      }
+
+      // current layer blocks on top
+      for (const b of state.map.blocks) {
+        if (b.y !== blockLayerY) continue;
+        drawBlockCell(b, 1);
       }
 
       // draw entities/items as overlays (somente na camada Y selecionada)
@@ -647,7 +900,7 @@
 
       // overlay info
       overlayEl.textContent = `Modo: ${state.toolMode}
-Andar (camada Y): ${state.layerY} | blocos y=${drawY} | npc/item layer=${activeEntityLayer}
+Andar (camada Y): ${state.layerY} | blocos y=${blockLayerY} | npc/item layer=${activeEntityLayer}
 Zoom: ${cell}px
 Blocos: ${state.map.blocks.length} | NPCs: ${state.map.entities.length} | Itens: ${state.map.items.length}`;
     }
@@ -692,11 +945,12 @@ Blocos: ${state.map.blocks.length} | NPCs: ${state.map.entities.length} | Itens:
 
       if (!state.selected) return;
 
-      if (mode === 'block' || mode === 'floor') {
+      if (mode === 'block') {
         const bt = state.selected.bt;
         if (!bt) return;
-        const y = (mode === 'floor') ? -0.5 : (state.layerY + 0.5);
-        upsertBlock(x, y, z, bt.id, mode === 'floor');
+        const isFloor = !!bt.isFloor;
+        const y = isFloor ? -0.5 : (state.layerY + 0.5);
+        upsertBlock(x, y, z, bt.id, isFloor);
         setStatus(`Bloco: ${bt.name} em (${x}, ${y}, ${z})`);
         draw();
         return;
@@ -727,6 +981,8 @@ Blocos: ${state.map.blocks.length} | NPCs: ${state.map.entities.length} | Itens:
         ));
         state.map.entities.push(entry);
         setStatus(`NPC: ${npc.name} em (${x + 0.5}, ${entry.y}, ${z + 0.5})`);
+        renderInventoryTargets();
+        renderInventoryList();
         draw();
         return;
       }
@@ -876,11 +1132,16 @@ Blocos: ${state.map.blocks.length} | NPCs: ${state.map.entities.length} | Itens:
           state.map = {
             version: payload.version || 1,
             player: payload.player || { x: 7.5, y: 2, z: 7.5, yaw: 0, pitch: 0 },
-            blocks: (payload.blocks || []).map(b => ({...b})),
+            blocks: (payload.blocks || []).map(b => {
+              const isFloor = !!b.isFloor || b.y === -0.5;
+              return { ...b, isFloor, y: isFloor ? -0.5 : b.y };
+            }),
             items: (payload.items || []).map(i => ({...i})),
             entities: (payload.entities || []).map(e => ({...e})),
           };
           setStatus(`Carregado. Blocos: ${state.map.blocks.length}, NPCs: ${state.map.entities.length}, Itens: ${state.map.items.length}`);
+          renderInventoryTargets();
+          renderInventoryList();
           draw();
         } catch {
           setStatus('Falha ao importar: JSON inválido.');
@@ -892,7 +1153,17 @@ Blocos: ${state.map.blocks.length} | NPCs: ${state.map.entities.length} | Itens:
     $('btn-export').addEventListener('click', () => {
       const payload = {
         version: 1,
-        player: state.map.player || { x: 7.5, y: 2, z: 7.5, yaw: 0, pitch: 0 },
+        player: state.map.player
+          ? {
+              x: state.map.player.x,
+              y: state.map.player.y,
+              z: state.map.player.z,
+              yaw: state.map.player.yaw || 0,
+              pitch: state.map.player.pitch || 0,
+              inventory: state.map.player.inventory || {},
+              itemInventory: state.map.player.itemInventory || {},
+            }
+          : { x: 7.5, y: 2, z: 7.5, yaw: 0, pitch: 0, inventory: {}, itemInventory: {} },
         blocks: state.map.blocks.map(b => ({ x: b.x, y: b.y, z: b.z, typeId: b.typeId, isFloor: !!b.isFloor })),
         items: state.map.items.map(i => ({ kind: i.kind, blockTypeId: i.blockTypeId || null, itemId: i.itemId || null, amount: i.amount || 1, x: i.x, y: i.y, z: i.z })),
         entities: state.map.entities.map(e => ({
@@ -906,6 +1177,8 @@ Blocos: ${state.map.blocks.length} | NPCs: ${state.map.entities.length} | Itens:
           hp: (typeof e.hp === 'number') ? e.hp : 100,
           maxHP: (typeof e.maxHP === 'number') ? e.maxHP : 100,
           isHostile: !!e.isHostile,
+          inventory: e.inventory || {},
+          itemInventory: e.itemInventory || {},
         })),
       };
       const data = JSON.stringify(payload, null, 2);
@@ -927,11 +1200,16 @@ Blocos: ${state.map.blocks.length} | NPCs: ${state.map.entities.length} | Itens:
         state.map = {
           version: payload.version || 1,
           player: payload.player || { x: 7.5, y: 2, z: 7.5, yaw: 0, pitch: 0 },
-          blocks: (payload.blocks || []).map(b => ({...b})),
+          blocks: (payload.blocks || []).map(b => {
+            const isFloor = !!b.isFloor || b.y === -0.5;
+            return { ...b, isFloor, y: isFloor ? -0.5 : b.y };
+          }),
           items: (payload.items || []).map(i => ({...i})),
           entities: (payload.entities || []).map(e => ({...e})),
         };
         setStatus(`Carregado default. Blocos: ${state.map.blocks.length}`);
+        renderInventoryTargets();
+        renderInventoryList();
         draw();
       } catch {
         setStatus('Falha ao carregar ./data/maps/default.json');
@@ -943,6 +1221,8 @@ Blocos: ${state.map.blocks.length} | NPCs: ${state.map.entities.length} | Itens:
       state.map.items = [];
       state.map.entities = [];
       setStatus('Mapa limpo.');
+      renderInventoryTargets();
+      renderInventoryList();
       draw();
     });
 
@@ -952,6 +1232,11 @@ Blocos: ${state.map.blocks.length} | NPCs: ${state.map.entities.length} | Itens:
       state.layerY = Math.trunc(Number(layerEl.value || 0));
       state.zoom = Math.trunc(Number(zoomEl.value || 26));
       renderPalette();
+      renderInventoryTargets();
+      inventoryState.targetKey = invTargetEl.value || 'player';
+      inventoryState.category = invCategoryEl.value || 'item';
+      renderInventoryOptions();
+      renderInventoryList();
       resizeCanvas();
       draw();
     }

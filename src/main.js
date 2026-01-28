@@ -369,7 +369,8 @@ function createNpcEntity(world, npcType, position, nameOverride = null, factionO
     const itemInventory = options.itemInventory && typeof options.itemInventory === 'object'
         ? { ...options.itemInventory }
         : (npcType.itemDrops || npcType.itemInventory || {});
-    if (!Object.keys(inventory).length) {
+    const disableFallback = options && options.disableInventoryFallback;
+    if (!Object.keys(inventory).length && !disableFallback) {
         const faction = factionOverride || npcType.faction || 'neutral';
         const fallbackByFaction = {
             village: BLOCK_TYPES.WOOD,
@@ -1915,7 +1916,9 @@ function exportMap(world) {
                 pitch: entity.pitch || 0,
                 hp: entity.hp,
                 maxHP: entity.maxHP,
-                isHostile: !!entity.isHostile
+                isHostile: !!entity.isHostile,
+                inventory: entity.inventory || {},
+                itemInventory: entity.itemInventory || {}
             }))
     };
     
@@ -1926,7 +1929,9 @@ function exportMap(world) {
             y: player.y,
             z: player.z,
             yaw: player.yaw || 0,
-            pitch: player.pitch || 0
+            pitch: player.pitch || 0,
+            inventory: player.inventory || {},
+            itemInventory: player.itemInventory || {}
         };
     }
     
@@ -2005,12 +2010,20 @@ function applyMap(world, payload) {
             const npcType = getNpcTypeById(entry.npcTypeId);
             let entity = null;
             if (npcType) {
+                const hasInventory = entry.inventory && typeof entry.inventory === 'object';
+                const hasItemInventory = entry.itemInventory && typeof entry.itemInventory === 'object';
                 entity = createNpcEntity(
                     world,
                     npcType,
                     { x: entry.x, y: entry.y, z: entry.z },
                     entry.name || null,
-                    entry.faction || null
+                    entry.faction || null,
+                    {
+                        inventory: entry.inventory || null,
+                        itemInventory: entry.itemInventory || null,
+                        selectedBlockTypeId: entry.selectedBlockTypeId || null,
+                        disableInventoryFallback: hasInventory || hasItemInventory
+                    }
                 );
             }
             if (!entity) continue;
@@ -2043,6 +2056,14 @@ function applyMap(world, payload) {
         player.z = payload.player.z;
         player.yaw = payload.player.yaw || 0;
         player.pitch = payload.player.pitch || 0;
+    }
+    if (payload.player && player) {
+        if (payload.player.inventory && typeof payload.player.inventory === 'object') {
+            player.inventory = { ...payload.player.inventory };
+        }
+        if (payload.player.itemInventory && typeof payload.player.itemInventory === 'object') {
+            player.itemInventory = { ...payload.player.itemInventory };
+        }
     }
 }
 
